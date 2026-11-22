@@ -34,7 +34,17 @@ enum HungarianToneStabilizer {
                 if voicedNeighbours {
                     switch (previousFrequency != nil, nextFrequency != nil) {
                     case (false, false):
-                        tones[toneIndex].amp *= 0.18
+                        if let bridged = bridgedUpperFrequency(
+                            at: frameIndex, replacing: current.hz,
+                            originalTones: original
+                        ) {
+                            // Rejoin a coherent 5 ms spectral track instead
+                            // of outputting an unrelated high-pitched chime.
+                            tones[toneIndex].hz = bridged
+                            tones[toneIndex].amp *= 0.70
+                        } else {
+                            tones[toneIndex].amp *= 0.18
+                        }
                     case (false, true), (true, false):
                         tones[toneIndex].amp *= 0.50
                     case (true, true):
@@ -67,6 +77,64 @@ enum HungarianToneStabilizer {
             }
             frames[frameIndex].hungarianTones = tones
         }
+
+        softenSustainedFricatives(&frames, originalTones: original)
+    }
+
+    /// A narrow high note held through a noisy /sz/ or /s/ sounds like a
+    /// whistle. Only reduce upper-band energy *inside* sustained unvoiced
+    /// regions; protect the first/last frames of each consonant and all
+    /// short stop releases.
+    private static func softenSustainedFricatives(
+        _ frames: inout [SpeechFrame],
+        originalTones: [[(hz: Double, amp: Double)]]
+    ) {
+        guard frames.count >= 3 else { return }
+        for index in 1..<(frames.count - 1) {
+            guard !frames[index].voiced, frames[index].level > 0,
+                  !frames[index - 1].voiced, frames[index - 1].level > 0,
+                  !frames[index + 1].voiced, frames[index + 1].level > 0 else {
+                continue
+            }
+
+            let tones = originalTones[index]
+            let total = tones.reduce(0.0) { $0 + $1.amp }
+            guard total > 0 else { continue }
+            let highTones = tones.filter { $0.hz >= 2800 }
+            guard !highTones.isEmpty else { continue }
+            let highShare = highTones.reduce(0.0) { $0 + $1.amp } / total
+
+            // Untracked upper peaks behave like narrowband whistles. A
+            // continuous fricative is attenuated less than an erratic one.
+            let trackedOnBothSides = highTones.allSatisfy { high in
+                [index - 1, index + 1].allSatisfy { neighbour in
+                    originalTones[neighbour].contains { candidate in
+                        abs(candidate.hz - high.hz) <= trackingDistanceHz
+                    }
+                }
+            }
+            let upperBandGain = trackedOnBothSides ? 0.82 : 0.58
+            frames[index].level *= Float(1 - highShare * (1 - upperBandGain))
+        }
+    }
+
+    /// Interpolate a missing upper spectral partial only when both adjacent
+    /// *voiced* frames agree on its trajectory. A true new consonant sound
+    /// has no such coherent track and is not replaced.
+    private static func bridgedUpperFrequency(
+        at index: Int, replacing outlierHz: Double,
+        originalTones: [[(hz: Double, amp: Double)]]
+    ) -> Double? {
+        let previous = originalTones[index - 1].filter { $0.hz >= upperToneStartHz }
+        let following = originalTones[index + 1].filter { $0.hz >= upperToneStartHz }
+        let possible = previous.flatMap { before in
+            following.compactMap { after -> Double? in
+                guard abs(before.hz - after.hz) <= 280 else { return nil }
+                let middle = (before.hz + after.hz) / 2
+                return abs(outlierHz - middle) > 500 ? middle : nil
+            }
+        }
+        return possible.min { abs($0 - outlierHz) < abs($1 - outlierHz) }
     }
 
     private static func neighbourFrequency(

@@ -84,12 +84,19 @@ func vowelFrame(_ upperHz: Double) -> SpeechFrame {
 var ringingFrames = [vowelFrame(2200), vowelFrame(2270),
                      vowelFrame(3800), vowelFrame(2210), vowelFrame(2200)]
 HungarianToneStabilizer.stabilize(&ringingFrames)
-verify(ringingFrames[2].hungarianTones[1].amp <= 0.2,
-       "isolated high-frequency whistles must be attenuated")
+verify(abs(ringingFrames[2].hungarianTones[1].hz - 2240) < 90,
+       "isolated upper spectral jumps must reconnect to their voiced neighbours")
+verify(ringingFrames[2].hungarianTones[1].amp <= 0.56,
+       "reconnected upper partial must retain conservative relative energy")
 var coherentFrames = [vowelFrame(2200), vowelFrame(2270), vowelFrame(2210)]
 HungarianToneStabilizer.stabilize(&coherentFrames)
 verify(coherentFrames[1].hungarianTones[1].hz < 2270,
        "coherent upper spectral peaks should be temporally smoothed")
+
+var genuineOnset = [vowelFrame(2200), vowelFrame(3650), vowelFrame(3000)]
+HungarianToneStabilizer.stabilize(&genuineOnset)
+verify(genuineOnset[1].hungarianTones[1].hz == 3650,
+       "do not invent a missing partial when neighbouring upper tones disagree")
 
 var halfTrackedFrames = [vowelFrame(2200), vowelFrame(2270), vowelFrame(3500)]
 let unfilteredHalfTrackedLevel = halfTrackedFrames[1].level
@@ -117,5 +124,30 @@ releaseFrames[1].hungarianTones = [(hz: 3700, amp: 1)]
 HungarianToneStabilizer.stabilize(&releaseFrames)
 verify(releaseFrames[1].hungarianTones[0].amp == 1,
        "unvoiced consonant release must be preserved")
+
+func fricativeFrame(_ hz: Double) -> SpeechFrame {
+    var frame = SpeechFrame()
+    frame.voiced = false
+    frame.level = 0.6
+    frame.hungarianTones = [(hz: 1800, amp: 0.5), (hz: hz, amp: 1.0)]
+    return frame
+}
+var sustainedFricative = [fricativeFrame(3000), fricativeFrame(3750),
+                          fricativeFrame(3100)]
+HungarianToneStabilizer.stabilize(&sustainedFricative)
+verify(sustainedFricative[1].level < 0.45,
+       "erratic high-frequency fricative peaks must be attenuated")
+verify(sustainedFricative[0].level == 0.6 &&
+       sustainedFricative[2].level == 0.6,
+       "protect fricative attack and release boundaries")
+verify(sustainedFricative[1].hungarianTones[1].hz == 3750,
+       "do not blur consonant peak frequency with vowel tracking")
+
+var stableFricative = [fricativeFrame(3100), fricativeFrame(3150),
+                       fricativeFrame(3200)]
+HungarianToneStabilizer.stabilize(&stableFricative)
+verify(stableFricative[1].level > sustainedFricative[1].level,
+       "stable fricative must retain more energy than erratic high-frequency peak")
+
 
 print("PASS: independent Hungarian spectral vocoder, pitch and 5-ms timing")

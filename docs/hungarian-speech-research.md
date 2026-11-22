@@ -139,3 +139,27 @@ This supports a reduction in high-frequency signal energy, not an objective
 measurement of human intelligibility. Keep subjective listening feedback
 separate from the numerical signal checks. The English path is unchanged
 and the shared 70–250 Hz speech-pulse limits are preserved.
+
+## Targeted removal of high-frequency frame outliers
+
+Long Hungarian utterances still contained narrow 5 ms spectral peaks that
+jumped away from the upper tone in both adjacent voiced frames. A full
+bandwidth reduction would also remove consonant cues. The updated stabilizer
+instead reconnects a missing upper spectral trajectory only if the preceding
+and following voiced frames agree (within 280 Hz) and the center is more
+than 500 Hz away. Consonant onset and offset frames are not bridged.
+
+The diagnostic on the same 16.258-second Hungarian phrase found 19 such
+upper-frequency outliers before this change and 1 afterward. The maximum
+voiced repetition frequency remained 250 Hz. Waveform duration remained
+16.258 seconds and peak output level 0.219.
+
+This result is a deterministic signal-quality improvement, not proof of
+human speech intelligibility or trackpad acoustic fidelity. The real
+trackpad was not actuated during this test.
+
+References:
+- McAulay and Quatieri (1986), sinusoidal speech modeling and temporal
+  tracking: https://www.ll.mit.edu/r-d/publications/speech-analysissynthesis-based-sinusoidal-representation
+- Spectral modeling synthesis, peak tracking and noise model:
+  https://dsprelated.com/freebooks/sasp/Spectral_Modeling_Synthesis.html
