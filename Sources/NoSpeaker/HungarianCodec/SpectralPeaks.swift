@@ -44,8 +44,25 @@ enum HungarianSpectrum {
             let current = spectrum[index]
             let leftEnergy = index > 0 ? spectrum[index - 1].energy : 0
             let rightEnergy = index + 1 < spectrum.count ? spectrum[index + 1].energy : 0
-            return current.energy >= leftEnergy && current.energy > rightEnergy ?
-                current : nil
+            guard current.energy >= leftEnergy, current.energy > rightEnergy else {
+                return nil
+            }
+            guard index > 0, index + 1 < spectrum.count else { return current }
+
+            // Interpolate the peak between neighbouring spectrum bins rather
+            // than snapping every sound to a 100 Hz grid. Three-point log
+            // parabola avoids adding tones or increasing haptic amplitude.
+            let leftLogPower = log(max(leftEnergy, 1e-12))
+            let centerLogPower = log(max(current.energy, 1e-12))
+            let rightLogPower = log(max(rightEnergy, 1e-12))
+            let curvature = leftLogPower - 2 * centerLogPower + rightLogPower
+            guard curvature < -1e-9 else { return current }
+            let binOffset = max(-0.5, min(0.5,
+                0.5 * (leftLogPower - rightLogPower) / curvature))
+            return HungarianSpectralPeak(
+                frequencyHz: current.frequencyHz + binOffset * frequencyStepHz,
+                energy: current.energy
+            )
         }
     }
 

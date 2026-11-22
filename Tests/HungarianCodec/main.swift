@@ -37,6 +37,13 @@ verify(selected.allSatisfy { (300...3900).contains($0.hz) &&
                              $0.amp > 0 && $0.amp <= 1 },
        "vocoder respects frequency and relative amplitude limits")
 
+// A non-grid-aligned formant must not be rounded to 100 Hz increments.
+let offGrid = HungarianSpectrum.peaks(in: sine(575))
+let finePeak = HungarianSpectrum.strongest(offGrid, within: 400...800)
+verify(abs((finePeak?.frequencyHz ?? 0) - 575) < 20,
+       "interpolated Hungarian formants should be within 20 Hz of a test tone")
+
+
 let voiced = HungarianAudioFeatures.measure(samples: sine(200))
 verify(abs((voiced.fundamentalHz ?? 0) - 200) < 10,
        "vocoder identifies source pitch")

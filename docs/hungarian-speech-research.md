@@ -54,6 +54,10 @@ No new motor amplitudes are introduced. English continues to use its original
 path. This design is informed by published tactile spectral-peak-picking
 work, but has not been validated as equivalent to any specific study.
 
+## Experimental refinement (November 22, 2026)
+
+Spectral-peak frequencies now use three-point log-power interpolation rather than being restricted to 100 Hz bins. A 575 Hz synthetic tone is recovered within 20 Hz in an automated test. Human listening must establish whether this improves actual speech intelligibility; the motor limits remain unchanged.
+
 ## Testing without motor actuation
 
     ./nospeaker --lang hu --preview "Hogy vagy?"
