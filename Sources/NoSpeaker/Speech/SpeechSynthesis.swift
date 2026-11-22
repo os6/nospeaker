@@ -47,8 +47,9 @@ func synthesizeSpeechFrames(_ text: String) -> [SpeechFrame] {
 
     let synthesisProcess = Process()
     synthesisProcess.executableURL = URL(fileURLWithPath: "/usr/bin/say")
-    let voiceToUse = speechLanguage.selectedVoiceName(overriding: voiceOverrideName)
-    let voiceArguments = voiceToUse.map { ["-v", $0] } ?? []
+    let selectedVoiceName = speechLanguage.selectedVoiceName(overriding: voiceOverrideName)
+    let voiceArgument = sayVoiceArgument(for: selectedVoiceName)
+    let voiceArguments = voiceArgument.map { ["-v", $0] } ?? []
     synthesisProcess.arguments = [
         "-o", temporaryAudioURL.path,
         "--file-format=WAVE", "--data-format=LEF32@16000"

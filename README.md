@@ -74,6 +74,14 @@ macOS built-in voices; download Tünde in macOS voice settings if it is missing.
 `--voice <name>` still overrides the system voice for either language. The
 interactive text entry accepts Hungarian accented characters, including ő and ű.
 
+**macOS Unicode voice fix:** Foundation's Process converts accented
+command-line arguments to decomposed UTF-8. Passing the displayed name
+"Tünde" directly to the macOS say command therefore silently selected the
+default English voice on this Mac. NoSpeaker now resolves accented voice names
+through Apple's AVSpeechSynthesisVoice identifiers (ASCII) before synthesis.
+The original English default voice is unchanged, and the test suite checks
+that gyár and giár no longer produce identical motor-preview WAVs.
+
 Hungarian audio processing uses a **separate experimental spectral vocoder**
 (20 ms analysis windows, 5 ms analysis hops). It selects up to two dominant
 audio spectrum components in each window, tracks pitch independently and

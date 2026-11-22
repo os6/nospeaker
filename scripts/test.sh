@@ -9,6 +9,10 @@ trap 'rm -f "$binary"' EXIT
 swiftc Sources/NoSpeaker/Speech/SpeechLanguage.swift Tests/Language/main.swift -o "$binary"
 "$binary"
 
+swiftc Sources/NoSpeaker/Speech/SpeechVoiceResolution.swift \
+    Tests/SpeechVoiceResolution/main.swift -o "$binary"
+"$binary"
+
 swiftc Sources/NoSpeaker/Speech/HungarianPhonology.swift Tests/Phonology/main.swift -o "$binary"
 "$binary"
 
@@ -40,6 +44,20 @@ trap 'rm -f "$binary"; rm -rf "$preview_directory"' EXIT
 ./nospeaker --preview-wav "$preview_directory/english.wav" "How are you?" >/dev/null
 test -s "$preview_directory/hungarian.wav"
 test -s "$preview_directory/english.wav"
+
+# Regression: Swift Process decomposes Unicode voice names. Before the fix,
+# say -v Tünde silently used the English default and the encoded outputs
+# for gyár and giár were byte-identical.
+if /usr/bin/say -v '?' | grep -q '^Tünde '; then
+    ./nospeaker --lang hu --preview-wav "$preview_directory/gyar.wav" "gyár" >/dev/null
+    ./nospeaker --lang hu --preview-wav "$preview_directory/giar.wav" "giár" >/dev/null
+    if cmp -s "$preview_directory/gyar.wav" "$preview_directory/giar.wav"; then
+        echo 'FAIL: Hungarian palatal stop collapsed into English g+i' >&2
+        exit 1
+    fi
+    echo 'PASS: Unicode Tünde voice selected, gy distinct from g+i'
+fi
+
 afinfo "$preview_directory/hungarian.wav" | grep -q '16000 Hz'
 afinfo "$preview_directory/english.wav" | grep -q '16000 Hz'
 echo 'PASS: English and Hungarian speaker WAVs rendered without motor activation'

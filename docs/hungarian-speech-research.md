@@ -1,16 +1,32 @@
 # Hungarian audio-to-haptic research
 
-## Grounded diagnosis
+## Confirmed root cause: incorrect voice selection
 
-The user's own listening tests established that Tünde's original output is
-intelligible on normal speakers, but the prior nospeaker motor-command preview
-rendered "Hogy vagy?" like "hogi vagi". The issue is therefore in the
-audio-to-haptic encoding, not Tünde's Hungarian letter-to-sound rules.
+The user's listening tests found Tünde's natural Hungarian clear on speakers,
+but the trackpad and its speaker preview produced "hogi vagi".
 
-Hungarian gy is a voiced palatal stop, IPA /ɟ/, rather than separate g and y.
-As a stop, its closure, release and adjacent formant transitions are meaningful
-perceptual cues. Hungarian orthography also has ty, ny, sz, zs, cs, dz and dzs.
-The macOS TTS already performs the orthography-to-pronunciation conversion.
+The decisive regression check synthesized the words gyár and giár:
+- Direct macOS say with the NFC name Tünde generated *different* source audio.
+- The Swift Process version generated *identical* audio for both phrases.
+- A raw argv byte inspection proved that Foundation's Process converted
+  the Unicode voice name to decomposed UTF-8 (NFD): u + combining diaeresis.
+- The macOS say command silently fell back to the default voice with that
+  decomposed name instead of selecting Hungarian Tünde.
+- The AVSpeechSynthesisVoice identifier
+  com.apple.voice.compact.hu-HU.Mariska is pure ASCII and selects the same
+  Tünde source audio as the correctly composed name.
+- After switching to the voice identifier, the Hungarian preview preserves
+  the gyár/giár difference; a regression test now enforces this.
+
+This voice-selection failure was the primary reason the earlier changes
+could not repair the perceived Hungarian pronunciation. The separate
+Hungarian spectral codec remains an experiment; further perceptual improvement
+must be evaluated independently, *after* confirming the correct source voice.
+
+Official documentation: Apple Foundation Process.arguments describes that
+arguments are passed via fileSystemRepresentation, which explains the observed
+Unicode normalization behavior:
+https://developer.apple.com/documentation/foundation/process/arguments
 
 ## Implementation: an independent Hungarian vocoder
 
