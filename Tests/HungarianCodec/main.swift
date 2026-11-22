@@ -90,6 +90,15 @@ var coherentFrames = [vowelFrame(2200), vowelFrame(2270), vowelFrame(2210)]
 HungarianToneStabilizer.stabilize(&coherentFrames)
 verify(coherentFrames[1].hungarianTones[1].hz < 2270,
        "coherent upper spectral peaks should be temporally smoothed")
+
+var halfTrackedFrames = [vowelFrame(2200), vowelFrame(2270), vowelFrame(3500)]
+let unfilteredHalfTrackedLevel = halfTrackedFrames[1].level
+HungarianToneStabilizer.stabilize(&halfTrackedFrames)
+verify(halfTrackedFrames[1].level < unfilteredHalfTrackedLevel,
+       "one-sided high-frequency jumps must lower absolute output level")
+verify(halfTrackedFrames[1].hungarianTones[0].hz == 650,
+       "low-frequency vowel component must retain its original frequency")
+
 verify(ringingFrames.allSatisfy { $0.hungarianTones.allSatisfy {
     $0.amp <= 1 && (300...3900).contains($0.hz)
 }}, "ringing suppression must not raise motor amplitude or frequencies")

@@ -12,6 +12,10 @@ enum HungarianToneStabilizer {
         for frameIndex in frames.indices where frames[frameIndex].voiced {
             guard frames[frameIndex].level > 0 else { continue }
             var tones = original[frameIndex]
+            let originalTotal = tones.reduce(0.0) { $0 + $1.amp }
+            let voicedNeighbours = frameIndex > 0 &&
+                frameIndex + 1 < frames.count &&
+                frames[frameIndex - 1].voiced && frames[frameIndex + 1].voiced
 
             for toneIndex in tones.indices where tones[toneIndex].hz >= upperToneStartHz {
                 let current = tones[toneIndex]
@@ -24,36 +28,42 @@ enum HungarianToneStabilizer {
                     frames: frames, originalTones: original
                 )
 
-                // A high note occurring in one voiced frame surrounded by
-                // voiced frames is spectral hopping, not a sustained formant.
-                let isolated = previousFrequency == nil && nextFrequency == nil &&
-                    frameIndex > 0 && frameIndex + 1 < frames.count &&
-                    frames[frameIndex - 1].voiced && frames[frameIndex + 1].voiced
-                if isolated {
-                    tones[toneIndex].amp *= 0.25
-                    if tones.count == 1 {
-                        // The motor normalizes tone amplitudes: with a single
-                        // tone, reducing its relative weight has no effect.
-                        frames[frameIndex].level *= 0.25
+                // A high tone that jumps between unrelated spectral peaks
+                // can whistle like a bell. Apply a short coherence weight
+                // only INSIDE voiced sections, never over consonant releases.
+                if voicedNeighbours {
+                    switch (previousFrequency != nil, nextFrequency != nil) {
+                    case (false, false):
+                        tones[toneIndex].amp *= 0.18
+                    case (false, true), (true, false):
+                        tones[toneIndex].amp *= 0.50
+                    case (true, true):
+                        break
                     }
                 }
 
-                // Smooth a tracked spectral component over 15 ms at most.
-                // Stop-release boundaries are left alone when neighbours
-                // are unvoiced or no coherent frequency match exists.
                 if let previousFrequency, let nextFrequency {
                     tones[toneIndex].hz =
                         0.25 * previousFrequency + 0.5 * current.hz +
                         0.25 * nextFrequency
                 }
 
-                // During stable vowels the low spectral peak should dominate.
-                // This avoids the high component sounding like a bell.
+                // Preserve lower vowel energy instead of letting the
+                // upper partial dominate the normalized haptic tone mix.
                 if let lowTone = tones.first, lowTone.hz < 1300,
                    toneIndex > 0 {
                     tones[toneIndex].amp = min(tones[toneIndex].amp,
-                                                lowTone.amp * 0.55)
+                                               lowTone.amp * 0.50)
                 }
+            }
+
+            // The motor renormalizes all tone amplitudes. If every tone is
+            // high (or there is only one), reducing weights alone has no
+            // audible effect. Preserve the absolute reduction in frame level.
+            let adjustedTotal = tones.reduce(0.0) { $0 + $1.amp }
+            if originalTotal > 0 {
+                frames[frameIndex].level *=
+                    Float(min(1, adjustedTotal / originalTotal))
             }
             frames[frameIndex].hungarianTones = tones
         }

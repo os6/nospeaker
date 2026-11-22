@@ -116,3 +116,26 @@ consonant releases unchanged. Since the motor normalizes simultaneous tone
 weights, isolated single-tone whistles reduce output level explicitly.
 Synthetic tests verify the changes while speaker WAVs confirm bounded output.
 Improved intelligibility and absence of ringing still require listening tests.
+
+
+## Follow-up: suppressing residual high-frequency ringing
+
+A real long-text sample showed numerous large (>850 Hz) upper spectral-peak
+jumps between adjacent voiced frames. The previous stabilizer attenuated
+only isolated peaks. The updated Hungarian-only filter applies continuity
+weights to upper peaks: 0.18 for untracked peaks and 0.50 when only one
+neighbour matches. Coherent peaks are smoothed over adjacent 5 ms frames.
+Normalization-aware attenuation also reduces absolute frame level, so two
+simultaneous high peaks cannot defeat the filter through amplitude
+renormalization. Unvoiced consonant releases are explicitly untouched.
+
+Identical 9.003-second, speaker-only test phrase:
+- Before: high-pass >3000 Hz RMS 0.01197, total RMS 0.05823,
+  peak absolute amplitude 0.2183.
+- After: high-pass >3000 Hz RMS 0.00861, total RMS 0.05671,
+  peak absolute amplitude 0.2089.
+
+This supports a reduction in high-frequency signal energy, not an objective
+measurement of human intelligibility. Keep subjective listening feedback
+separate from the numerical signal checks. The English path is unchanged
+and the shared 70–250 Hz speech-pulse limits are preserved.
