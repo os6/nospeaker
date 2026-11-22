@@ -1,4 +1,4 @@
 build/
-nospeaker
+/nospeaker
 .DS_Store
 dist/

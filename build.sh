@@ -31,11 +31,20 @@ if [ -z "$1" ] || [ "$1" -lt 5 ] || { [ "$1" -eq 5 ] && [ "$2" -lt 7 ]; }; then
 fi
 
 mkdir -p build
+# Compile all Swift source files; main.swift is the sole executable entry point.
+source_dir="Sources/NoSpeaker"
+source_files=$(find "$source_dir" -name '*.swift' ! -name 'main.swift' | LC_ALL=C sort)
+set -- "$source_dir/main.swift"
+while IFS= read -r source_file; do
+    [ -n "$source_file" ] && set -- "$@" "$source_file"
+done <<EOF
+$source_files
+EOF
 echo "building for Apple Silicon…"
-swiftc -O -target arm64-apple-macos12 nospeaker.swift -o build/nospeaker-arm64 \
+swiftc -O -target arm64-apple-macos12 "$@" -o build/nospeaker-arm64 \
     || fail "the Apple Silicon build failed (errors above). Make sure Xcode or the Command Line Tools are up to date."
 echo "building for Intel…"
-swiftc -O -target x86_64-apple-macos13 nospeaker.swift -o build/nospeaker-x86_64 \
+swiftc -O -target x86_64-apple-macos13 "$@" -o build/nospeaker-x86_64 \
     || fail "the Intel build failed (errors above). Make sure Xcode or the Command Line Tools are up to date."
 
 lipo -create build/nospeaker-arm64 build/nospeaker-x86_64 -output build/nospeaker

@@ -58,6 +58,21 @@ cd nospeaker
 ./nospeaker
 ```
 
+## Language / Nyelv
+
+English remains the default (Daniel). Hungarian is optional (Tünde) using the
+macOS built-in voices; download Tünde in macOS voice settings if it is missing.
+
+```sh
+./nospeaker "hello there"          # English (default)
+./nospeaker --lang hu "Szia!"      # Hungarian
+./nospeaker --lang en "Hello!"     # English (explicit)
+./nospeaker --lang hu             # complete Hungarian demo
+```
+
+`--voice <name>` still overrides the system voice for either language. The
+interactive text entry accepts Hungarian accented characters, including ő and ű.
+
 ## 03 / play with it
 
 ```text
@@ -134,7 +149,9 @@ because the motor's strength is split fewer ways.
 It sounds robotic, and it's much easier to follow when you can read along, which is why the show types every
 line as it speaks.
 
-**The code.** One Swift file, [nospeaker.swift](nospeaker.swift), with no dependencies.
+**The code.** The dependency-free Swift sources are organized under
+[Sources/NoSpeaker](Sources/NoSpeaker) by responsibility: Audio, Core,
+Haptics, Interface, Show, and Speech. build.sh compiles them into one executable.
 
 ## 06 / caveats
 
