@@ -17,7 +17,8 @@ func actuationForSpeechFrame(_ frame: SpeechFrame) -> SpeechActuation? {
 
     if frame.voiced {
         return SpeechActuation(
-            tones: formantTones(frame),
+            tones: speechLanguage == .hungarian && !frame.hungarianTones.isEmpty
+                ? frame.hungarianTones : formantTones(frame),
             durationSeconds: 1 / frame.f0,
             level: frame.level,
             isVoiced: true,

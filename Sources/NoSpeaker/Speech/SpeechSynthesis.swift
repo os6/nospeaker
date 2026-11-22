@@ -12,6 +12,7 @@ struct SpeechFrame {
     var f0 = 110.0
     // Populated only in Hungarian mode; the English encoder is unchanged.
     var consonantTones: [(hz: Double, amp: Double)] = []
+    var hungarianTones: [(hz: Double, amp: Double)] = []
 }
 let hop = 0.010
 let sampleRate = 16000.0
@@ -77,6 +78,9 @@ func synthesizeSpeechFrames(_ text: String) -> [SpeechFrame] {
 
     let samples = Array(UnsafeBufferPointer(start: channelSamples, count: Int(audioBuffer.frameLength)))
     var speechFrames = analyzeSpeechSamples(samples)
+    if speechLanguage == .hungarian {
+        HungarianSpeechEncoder.apply(to: &speechFrames, text: text)
+    }
     while speechFrames.first?.level == 0 { speechFrames.removeFirst() }
     while speechFrames.last?.level == 0 { speechFrames.removeLast() }
     return speechFrames

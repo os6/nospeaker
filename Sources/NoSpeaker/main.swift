@@ -33,6 +33,7 @@ if takeFlag("--help") || takeFlag("-h") {
       nospeaker --lang en "Hello"      speak English explicitly
       nospeaker --preview --lang hu "Szia!"  hear the motor signal on speakers
       nospeaker --preview-wav sound.wav "hello"  export the simulated signal
+      nospeaker --lang hu --phonemes "Hogy vagy?"  approximate Hungarian IPA
       nospeaker --sweep                 a rising tone, 100 Hz to 4 kHz
       --lang en|hu                     speech language (default: en)
       --voice Daniel                   any voice from `say -v '?'`
@@ -60,11 +61,22 @@ let plain = takeFlag("--plain")
 let wantsSweep = takeFlag("--sweep")
 let wantsSpeakerPreview = takeFlag("--preview")
 let previewFilePath = takeOption("--preview-wav", example: "preview.wav")
+let wantsPhonemes = takeFlag("--phonemes")
 if let unknown = remainingArguments.first(where: { $0.hasPrefix("-") }) { usageError("\"\(unknown)\" isn't an option.") }
 
 signal(SIGINT) { _ in requestEnd() }
 signal(SIGTERM) { _ in stopRequested = true }
 atexit { restoreTerminal() }
+
+if wantsPhonemes {
+    guard speechLanguage == .hungarian, !remainingArguments.isEmpty,
+          !wantsSweep, !wantsSpeakerPreview, previewFilePath == nil else {
+        usageError("--phonemes requires --lang hu and text, without playback options.")
+    }
+    let phrase = remainingArguments.joined(separator: " ")
+    print("Hungarian phoneme inventory (approximate IPA): /\(HungarianPhonology.approximateIPA(phrase))/")
+    exit(0)
+}
 
 if wantsSpeakerPreview || previewFilePath != nil {
     guard !wantsSweep, !remainingArguments.isEmpty else {

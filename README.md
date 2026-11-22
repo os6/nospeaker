@@ -80,6 +80,23 @@ measured from Tünde's synthesized audio. This aims to preserve distinctions
 between consonants on the trackpad. The English synthesis path is unchanged.
 The trackpad's limited acoustic bandwidth still constrains intelligibility.
 
+Hungarian text is also tokenized into phoneme units for the experimental
+encoder, so gy (/ɟ/), ty (/c/), sz (/s/), cs (/t͡ʃ/), dzs (/d͡ʒ/) and long
+digraph spellings are not mistaken for sequences of unrelated letters.
+The encoder uses this information when choosing dynamic F2/F3 cues from the
+original audio; the English signal path is unchanged.
+
+The lightweight phoneme inventory is not a complete Hungarian G2P engine:
+assimilation, irregular names and other morphological phenomena are still
+handled by Tünde. You can inspect the written-unit approximation without
+opening the motor:
+
+```sh
+./nospeaker --lang hu --phonemes "Hogy vagy?"
+# Hungarian phoneme inventory (approximate IPA): /hoɟ vɒɟ/
+```
+
+
 ## Test without actuating the trackpad
 
 The program can render its haptic sine-tone commands to a regular speaker as

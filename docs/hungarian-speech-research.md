@@ -24,6 +24,38 @@
 - These are physics-informed candidate improvements, not independently
   validated human recognition gains. Evaluate through speaker preview.
 
+## Phoneme-aware Hungarian encoder
+
+The baseline used just the first two formants (F1/F2) for voiced speech.
+That can turn palatal-stop transitions into sustained high-vowel-like tones.
+A new, isolated Hungarian encoding layer identifies multigraph consonants
+(gy /ɟ/, ty /c/, cs /t͡ʃ/, sz /s/, dzs /d͡ʒ/, etc.) and their orthographic
+geminates. It uses their presence to enable low-energy, fast-transition
+F2/F3 selection in the acoustic track of the synthesized utterance.
+
+The signal frequency and timing still come from Tünde's audio, not from
+pronouncing the letters separately. The encoder *does not* perform phoneme
+forced alignment. It is a phoneme-informed acoustic heuristic, not a complete
+Hungarian model.
+
+Bench tests without motor activation:
+- Hogy vagy? => approximate /hoɟ vɒɟ/; 10 frames with F2/F3 cues.
+- Hogi vagi => approximate /hoɡi vɒɡi/; 0 such frames.
+- Gyár => 5 F2/F3 frames; Tyúk => 2.
+- Szép and Dzsungel => 0 F2/F3 frames (other consonant encoding applies).
+
+These checks prove that the algorithm distinguishes phonetic categories in
+code, **not** that the output is already intelligible. The speaker preview
+is the next step for auditory evaluation.
+
+Research support:
+- Novák and Siklósi, Grapheme-to-phoneme transcription in Hungarian (2016):
+  https://users.itk.ppke.hu/~sikbo/pdfs/cicling-ipa-2016.pdf
+- Geng et al., palatal category perception in the F2/F3 space (2005):
+  https://www.isca-archive.org/psp_2005/geng05_psp.pdf
+- Spectral peak picking for tactile speech (2025):
+  https://pubmed.ncbi.nlm.nih.gov/41286404/
+
 ## Offline listening and safety
 
 Use this to render the same frequency, relative amplitude, duration, and
