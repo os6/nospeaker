@@ -9,16 +9,15 @@ trap 'rm -f "$binary"' EXIT
 swiftc Sources/NoSpeaker/Speech/SpeechLanguage.swift Tests/Language/main.swift -o "$binary"
 "$binary"
 
-swiftc Sources/NoSpeaker/Speech/HungarianConsonants.swift Tests/Consonants/main.swift -o "$binary"
-"$binary"
-
 swiftc Sources/NoSpeaker/Speech/HungarianPhonology.swift Tests/Phonology/main.swift -o "$binary"
 "$binary"
 
-swiftc Sources/NoSpeaker/Speech/HungarianPhonology.swift \
-    Sources/NoSpeaker/Speech/HungarianSpeechEncoder.swift \
-    Tests/HungarianEncoder/main.swift -o "$binary"
+swiftc Sources/NoSpeaker/HungarianCodec/SpectralPeaks.swift \
+    Sources/NoSpeaker/HungarianCodec/SpeechFeatures.swift \
+    Sources/NoSpeaker/HungarianCodec/HungarianVocoder.swift \
+    Tests/HungarianCodec/main.swift -o "$binary"
 "$binary"
+
 
 ./nospeaker --help | grep -q 'speak English (default)'
 ./nospeaker --help | grep -q -- '--lang hu'

@@ -9,7 +9,8 @@ enum SpeakerPreview {
     static let safeGain = 0.22
 
     static func render(_ frames: [SpeechFrame], to destination: URL) throws {
-        let requestedDuration = Double(frames.count) * hop
+        guard let firstFrame = frames.first else { throw PreviewError.invalidDuration }
+        let requestedDuration = Double(frames.count) * firstFrame.frameIntervalSeconds
         guard requestedDuration > 0, requestedDuration <= maximumDuration else {
             throw PreviewError.invalidDuration
         }

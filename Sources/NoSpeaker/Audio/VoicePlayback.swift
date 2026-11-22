@@ -36,7 +36,7 @@ func playFrequencySweep(seconds: Double = 6) {
 
 func playSpeech(_ frames: [SpeechFrame], text: String) {
     guard !frames.isEmpty else { return }
-    caption(text, seconds: Double(frames.count) * hop)
+    caption(text, seconds: Double(frames.count) * frames[0].frameIntervalSeconds)
     let playbackStart = mach_absolute_time()
     enumerateSpeechActuations(frames, realtime: true) { startSeconds, actuation in
         playHapticTones(actuation.tones, ms: actuation.durationSeconds * 1000,

@@ -56,13 +56,7 @@ func polynomialRoots(_ a: [Double]) -> [ComplexNumber] {
 
 func analyzeSpeechSamples(_ x: [Float]) -> [SpeechFrame] {
     let win = Int(0.025 * sampleRate), hopN = Int(hop * sampleRate), order = 18
-    // Preserve the original English pitch range; the Hungarian voice can be higher.
-    let maximumPitchSearchHz = speechLanguage == .hungarian ? 450.0 : 300.0
-    let maximumOutputPitchHz = speechLanguage == .hungarian ? 400.0 : 250.0
-    // Unlike the original English setting, Hungarian preserves quiet stop
-    // closures and rapid formant transitions to distinguish palatal stops.
-    let amplitudeExponent = speechLanguage == .hungarian ? 0.95 : 0.45
-    let smoothingRadius = speechLanguage == .hungarian ? 1 : 2
+    // The original English LPC/formant analysis remains unchanged.
     let hamming = (0..<win).map { 0.54 - 0.46 * cos(2 * .pi * Double($0) / Double(win - 1)) }
     var frames: [SpeechFrame] = [], rmsList: [Double] = []
     var prev = SpeechFrame()
@@ -74,7 +68,7 @@ func analyzeSpeechSamples(_ x: [Float]) -> [SpeechFrame] {
         var zc = 0
         for k in 1..<win where (seg[k] >= 0) != (seg[k - 1] >= 0) { zc += 1 }
         var bestLag = 0, bestR = 0.0
-        for lag in Int(sampleRate / maximumPitchSearchHz)...Int(sampleRate / 70) where lag < win - 40 {
+        for lag in Int(sampleRate / 300)...Int(sampleRate / 70) where lag < win - 40 {
             var s = 0.0, ea = 0.0, eb = 0.0
             for k in 0..<(win - lag) { s += seg[k] * seg[k + lag]; ea += seg[k] * seg[k]; eb += seg[k + lag] * seg[k + lag] }
             let r = s / max(sqrt(ea * eb), 1e-12)
@@ -84,9 +78,6 @@ func analyzeSpeechSamples(_ x: [Float]) -> [SpeechFrame] {
         if f.voiced, bestLag > 0 { f.f0 = sampleRate / Double(bestLag) }
         var pe = [Double](repeating: 0, count: win)
         for k in 0..<win { pe[k] = (seg[k] - 0.97 * (k > 0 ? seg[k - 1] : 0)) * hamming[k] }
-        f.consonantTones = speechLanguage == .hungarian && !f.voiced
-            ? hungarianConsonantTones(samples: pe, samplingRate: sampleRate)
-            : []
         let (a, err) = linearPredictionCoefficients(pe, order: order)
         var cands: [Double] = []
         if err > 0 {
@@ -117,16 +108,16 @@ func analyzeSpeechSamples(_ x: [Float]) -> [SpeechFrame] {
     let peak = rmsList.max() ?? 1
     for k in frames.indices {
         let rel = rmsList[k] / max(peak, 1e-9)
-        frames[k].level = rel < 0.02 ? 0 : Float(min(1, pow(rel, amplitudeExponent)))
+        frames[k].level = rel < 0.02 ? 0 : Float(min(1, pow(rel, 0.45)))
         if frames[k].level == 0 { frames[k].voiced = false }
     }
     func median(_ v: [Double]) -> Double { v.sorted()[v.count / 2] }
     let raw = frames
     for k in frames.indices {
-        let lo = max(0, k - smoothingRadius)
-        let hi = min(frames.count - 1, k + smoothingRadius)
+        let lo = max(0, k - 2)
+        let hi = min(frames.count - 1, k + 2)
         for j in 0..<3 { frames[k].formants[j] = median((lo...hi).map { raw[$0].formants[j] }) }
-        frames[k].f0 = min(maximumOutputPitchHz, max(70, median((lo...hi).map { raw[$0].f0 })))
+        frames[k].f0 = min(250, max(70, median((lo...hi).map { raw[$0].f0 })))
     }
     return frames
 }

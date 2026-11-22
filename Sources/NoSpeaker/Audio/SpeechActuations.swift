@@ -28,13 +28,9 @@ func actuationForSpeechFrame(_ frame: SpeechFrame) -> SpeechActuation? {
         )
     }
 
-    let consonantTones: [(hz: Double, amp: Double)]
-    if speechLanguage == .hungarian {
-        consonantTones = frame.consonantTones
-    } else {
-        // Original English behavior intentionally remains unchanged.
-        consonantTones = (0..<3).map { _ in (Double.random(in: 2700...4300), 1.0) }
-    }
+    let consonantTones = speechLanguage == .hungarian
+        ? frame.hungarianTones
+        : (0..<3).map { _ in (hz: Double.random(in: 2700...4300), amp: 1.0) }
     guard !consonantTones.isEmpty else { return nil }
     return SpeechActuation(tones: consonantTones, durationSeconds: 0.004,
                            level: frame.level * 0.7, isVoiced: false,
@@ -50,11 +46,12 @@ func enumerateSpeechActuations(
     waitForTime: (Double) -> Void = { _ in }
 ) {
     guard !frames.isEmpty else { return }
-    let totalDuration = Double(frames.count) * hop
+    let frameInterval = frames[0].frameIntervalSeconds
+    let totalDuration = Double(frames.count) * frameInterval
     var elapsedSeconds = 0.0
 
     while elapsedSeconds < totalDuration && (!realtime || !interrupted()) {
-        let frame = frames[min(frames.count - 1, Int(elapsedSeconds / hop))]
+        let frame = frames[min(frames.count - 1, Int(elapsedSeconds / frameInterval))]
         let actuation = actuationForSpeechFrame(frame)
         if let actuation { emit(elapsedSeconds, actuation) }
         let step = actuation?.durationSeconds ??

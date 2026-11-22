@@ -74,28 +74,25 @@ macOS built-in voices; download Tünde in macOS voice settings if it is missing.
 `--voice <name>` still overrides the system voice for either language. The
 interactive text entry accepts Hungarian accented characters, including ő and ű.
 
-Hungarian mode also includes an experimental consonant encoder: instead of
-randomized high-frequency tones, unvoiced sounds use frequency components
-measured from Tünde's synthesized audio. This aims to preserve distinctions
-between consonants on the trackpad. The English synthesis path is unchanged.
-The trackpad's limited acoustic bandwidth still constrains intelligibility.
+Hungarian audio processing uses a **separate experimental spectral vocoder**
+(20 ms analysis windows, 5 ms analysis hops). It selects up to two dominant
+audio spectrum components in each window, tracks pitch independently and
+preserves rapid amplitude changes. Tünde produces the original Hungarian
+speech; the vocoder turns that audio into motor commands. The original English
+LPC/formant pipeline is left unchanged.
 
-Hungarian text is also tokenized into phoneme units for the experimental
-encoder, so gy (/ɟ/), ty (/c/), sz (/s/), cs (/t͡ʃ/), dzs (/d͡ʒ/) and long
-digraph spellings are not mistaken for sequences of unrelated letters.
-The encoder uses this information when choosing dynamic F2/F3 cues from the
-original audio; the English signal path is unchanged.
-
-The lightweight phoneme inventory is not a complete Hungarian G2P engine:
-assimilation, irregular names and other morphological phenomena are still
-handled by Tünde. You can inspect the written-unit approximation without
-opening the motor:
+The optional Hungarian phoneme inventory identifies gy (/ɟ/), ty (/c/),
+sz (/s/), cs (/t͡ʃ/), dzs (/d͡ʒ/) and long digraph spellings for inspection.
+This spelling-to-IPA inventory is **not** a complete G2P system and does not
+replace Tünde's pronunciation or time-align phonemes to the waveform:
 
 ```sh
 ./nospeaker --lang hu --phonemes "Hogy vagy?"
 # Hungarian phoneme inventory (approximate IPA): /hoɟ vɒɟ/
 ```
 
+Intelligibility is limited by the physical trackpad and the maximum of two
+simultaneous tones. This encoding is experimental until listeners validate it.
 
 ## Test without actuating the trackpad
 
