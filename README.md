@@ -74,6 +74,12 @@ macOS built-in voices; download Tünde in macOS voice settings if it is missing.
 `--voice <name>` still overrides the system voice for either language. The
 interactive text entry accepts Hungarian accented characters, including ő and ű.
 
+Hungarian mode also includes an experimental consonant encoder: instead of
+randomized high-frequency tones, unvoiced sounds use frequency components
+measured from Tünde's synthesized audio. This aims to preserve distinctions
+between consonants on the trackpad. The English synthesis path is unchanged.
+The trackpad's limited acoustic bandwidth still constrains intelligibility.
+
 ## 03 / play with it
 
 ```text

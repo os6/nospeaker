@@ -10,6 +10,8 @@ struct SpeechFrame {
     var level: Float = 0
     var voiced = false
     var f0 = 110.0
+    // Populated only in Hungarian mode; the English encoder is unchanged.
+    var consonantTones: [(hz: Double, amp: Double)] = []
 }
 let hop = 0.010
 let sampleRate = 16000.0

@@ -50,7 +50,15 @@ func playSpeech(_ frames: [SpeechFrame], text: String) {
                 updateLiveState { $0.f0 = f.f0; $0.f1 = f.formants[0]; $0.f2 = f.formants[1] }
             } else {
                 step = 0.004
-                playHapticTones((0..<3).map { _ in (Double.random(in: 2700...4300), 1.0) }, ms: step * 1000, level: f.level * 0.7)
+                if speechLanguage == .hungarian {
+                    if !f.consonantTones.isEmpty {
+                        playHapticTones(f.consonantTones, ms: step * 1000, level: f.level * 0.7)
+                    }
+                } else {
+                    // Retain the original English consonant rendering.
+                    playHapticTones((0..<3).map { _ in (Double.random(in: 2700...4300), 1.0) },
+                                    ms: step * 1000, level: f.level * 0.7)
+                }
             }
         }
         t += step

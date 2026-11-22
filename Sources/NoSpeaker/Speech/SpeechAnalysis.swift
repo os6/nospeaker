@@ -80,6 +80,9 @@ func analyzeSpeechSamples(_ x: [Float]) -> [SpeechFrame] {
         if f.voiced, bestLag > 0 { f.f0 = sampleRate / Double(bestLag) }
         var pe = [Double](repeating: 0, count: win)
         for k in 0..<win { pe[k] = (seg[k] - 0.97 * (k > 0 ? seg[k - 1] : 0)) * hamming[k] }
+        f.consonantTones = speechLanguage == .hungarian && !f.voiced
+            ? hungarianConsonantTones(samples: pe, samplingRate: sampleRate)
+            : []
         let (a, err) = linearPredictionCoefficients(pe, order: order)
         var cands: [Double] = []
         if err > 0 {
