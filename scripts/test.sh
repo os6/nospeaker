@@ -13,6 +13,10 @@ swiftc Sources/NoSpeaker/Core/SpeechActuationLimits.swift \
     Tests/SpeechActuationLimits/main.swift -o "$binary"
 "$binary"
 
+swiftc Sources/NoSpeaker/HungarianCodec/PulsePhaseAlignment.swift \
+    Tests/PulsePhaseAlignment/main.swift -o "$binary"
+"$binary"
+
 swiftc Sources/NoSpeaker/Speech/SpeechVoiceResolution.swift \
     Tests/SpeechVoiceResolution/main.swift -o "$binary"
 "$binary"

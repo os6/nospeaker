@@ -163,3 +163,27 @@ References:
   tracking: https://www.ll.mit.edu/r-d/publications/speech-analysissynthesis-based-sinusoidal-representation
 - Spectral modeling synthesis, peak tracking and noise model:
   https://dsprelated.com/freebooks/sasp/Spectral_Modeling_Synthesis.html
+
+## Isolated A/B after Hungarian listening feedback (2026-11-22)
+
+The user reported *two different artifacts*: sharp crackling/contact-like
+distortion was reduced in the combined phase-and-fricative experiment, but
+musical ringing became much worse. Reverting both was too broad.
+
+For the controlled follow-up, we reintroduced **only**
+HungarianPulsePhaseAlignment (integer carrier cycles per existing pulse).
+We intentionally excluded randomized/rapid fricative carrier jitter, which
+could create new whistles. This keeps the global 70–250 Hz pulse-rate
+limits and the unmodified English encoder.
+
+The short and long speaker-preview WAVs for the phase-only variant match
+the earlier, independently generated phase-only test files byte-for-byte.
+The phase-only method prevents modelled nonzero end-of-command discontinuities
+but changes carrier frequencies by up to half the pulse rate. Listening is
+needed to distinguish relief of clicks from any residual musical artifacts.
+
+References:
+- SOF Project tone engine: sine start/stop clicks and anti-click ramps
+  https://thesofproject.github.io/latest/developer_guides/firmware/tone.html
+- Apple Accelerate: windowing reduces signal discontinuity artifacts
+  https://developer.apple.com/documentation/accelerate/reducing-spectral-leakage-with-windowing

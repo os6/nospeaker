@@ -16,10 +16,15 @@ func actuationForSpeechFrame(_ frame: SpeechFrame) -> SpeechActuation? {
     guard frame.level > 0 else { return nil }
 
     if frame.voiced {
+        let duration = 1 / SpeechActuationLimits.cappedPulseRate(frame.f0)
+        let originalTones = speechLanguage == .hungarian &&
+            !frame.hungarianTones.isEmpty ? frame.hungarianTones : formantTones(frame)
+        let tones = speechLanguage == .hungarian
+            ? HungarianPulsePhaseAlignment.tones(originalTones, duration: duration)
+            : originalTones
         return SpeechActuation(
-            tones: speechLanguage == .hungarian && !frame.hungarianTones.isEmpty
-                ? frame.hungarianTones : formantTones(frame),
-            durationSeconds: 1 / SpeechActuationLimits.cappedPulseRate(frame.f0),
+            tones: tones,
+            durationSeconds: duration,
             level: frame.level,
             isVoiced: true,
             pitchHz: frame.f0,
@@ -32,7 +37,11 @@ func actuationForSpeechFrame(_ frame: SpeechFrame) -> SpeechActuation? {
         ? frame.hungarianTones
         : (0..<3).map { _ in (hz: Double.random(in: 2700...4300), amp: 1.0) }
     guard !consonantTones.isEmpty else { return nil }
-    return SpeechActuation(tones: consonantTones, durationSeconds: SpeechActuationLimits.unvoicedPulseDurationSeconds,
+    let duration = SpeechActuationLimits.unvoicedPulseDurationSeconds
+    let tones = speechLanguage == .hungarian
+        ? HungarianPulsePhaseAlignment.tones(consonantTones, duration: duration)
+        : consonantTones
+    return SpeechActuation(tones: tones, durationSeconds: duration,
                            level: frame.level * 0.7, isVoiced: false,
                            pitchHz: 0, firstFormantHz: 0, secondFormantHz: 0)
 }
