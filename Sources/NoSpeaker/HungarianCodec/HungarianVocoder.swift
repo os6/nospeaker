@@ -31,7 +31,7 @@ enum HungarianVocoder {
             frame.frameIntervalSeconds = Double(analysisHopSize) / sampleRate
             frame.voiced = isVoiced
             // Stay within the original English motor scheduling ceiling.
-            frame.f0 = min(250, features.fundamentalHz ?? 180)
+            frame.f0 = SpeechActuationLimits.cappedPulseRate(features.fundamentalHz ?? 180)
             frame.hungarianTones = tones
 
             if let lowTone = tones.first {
@@ -56,6 +56,7 @@ enum HungarianVocoder {
                 frames[index].hungarianTones = []
             }
         }
+        HungarianToneStabilizer.stabilize(&frames)
         return frames
     }
 }

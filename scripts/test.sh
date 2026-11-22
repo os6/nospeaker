@@ -9,6 +9,10 @@ trap 'rm -f "$binary"' EXIT
 swiftc Sources/NoSpeaker/Speech/SpeechLanguage.swift Tests/Language/main.swift -o "$binary"
 "$binary"
 
+swiftc Sources/NoSpeaker/Core/SpeechActuationLimits.swift \
+    Tests/SpeechActuationLimits/main.swift -o "$binary"
+"$binary"
+
 swiftc Sources/NoSpeaker/Speech/SpeechVoiceResolution.swift \
     Tests/SpeechVoiceResolution/main.swift -o "$binary"
 "$binary"
@@ -16,9 +20,11 @@ swiftc Sources/NoSpeaker/Speech/SpeechVoiceResolution.swift \
 swiftc Sources/NoSpeaker/Speech/HungarianPhonology.swift Tests/Phonology/main.swift -o "$binary"
 "$binary"
 
-swiftc Sources/NoSpeaker/HungarianCodec/SpectralPeaks.swift \
+swiftc Sources/NoSpeaker/Core/SpeechActuationLimits.swift \
+    Sources/NoSpeaker/HungarianCodec/SpectralPeaks.swift \
     Sources/NoSpeaker/HungarianCodec/SpeechFeatures.swift \
     Sources/NoSpeaker/HungarianCodec/HungarianVocoder.swift \
+    Sources/NoSpeaker/HungarianCodec/ToneStabilizer.swift \
     Tests/HungarianCodec/main.swift -o "$binary"
 "$binary"
 

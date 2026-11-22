@@ -102,6 +102,13 @@ replace Tünde's pronunciation or time-align phonemes to the waveform:
 Intelligibility is limited by the physical trackpad and the maximum of two
 simultaneous tones. This encoding is experimental until listeners validate it.
 
+Speech pulse rate is controlled by one global shared safety policy:
+`SpeechActuationLimits` (70–250 Hz) for English and Hungarian.
+The 250 Hz upper bound controls the repetition rate of voiced pulses, not
+the acoustic frequencies of the sine-tone components (which can exceed
+250 Hz in the original English algorithm). The English acoustic processing
+and its existing motor tone frequencies remain unchanged.
+
 ## Test without actuating the trackpad
 
 The program can render its haptic sine-tone commands to a regular speaker as

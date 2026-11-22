@@ -41,8 +41,10 @@ https://developer.apple.com/documentation/foundation/process/arguments
   and preserving local relative amplitude and low-energy pauses.
 - Upper-frequency peaks are emphasized for unvoiced consonants and fast
   onsets; voiced vowel stretches prefer one low and one high spectral peak.
-- The Hungarian actuator repetition rate remains capped at 250 Hz, the
-  original English ceiling, instead of increasing load to chase high pitches.
+- English and Hungarian now share the same global speech-pulse bounds,
+  70–250 Hz, in SpeechActuationLimits. Unvoiced pulses retain their
+  original 4 ms duration (250 per second). This limit is separate from the
+  much higher carrier/spectral frequencies also used by original English.
 - The separate Hungarian encoder avoids the earlier heuristic which enabled
   F2/F3 changes throughout an entire phrase merely because that phrase
   *contained* a palatal phoneme, without any phoneme-to-audio alignment.
@@ -97,3 +99,20 @@ of the motor, glass, case, driver or acoustic room response.
   https://pmc.ncbi.nlm.nih.gov/articles/PMC11217272/
 - Spectral peak picking improves tactile speech perception (2025):
   https://pubmed.ncbi.nlm.nih.gov/41286404/
+
+
+## Shared pulse limits and ringing suppression
+
+Speech pulse scheduling now uses one shared SpeechActuationLimits policy
+across English and Hungarian: 70–250 Hz. Unvoiced pulses retain the original
+4 ms duration. This is the **pulse repetition limit**, not a 250 Hz cap on
+the spectral carrier frequencies, which the original English engine also
+uses above 250 Hz.
+
+The Hungarian-only ToneStabilizer smooths high-frequency peaks tracked across
+nearby voiced frames, attenuates isolated high-frequency jumps, and reduces
+overly strong high components during stable vowels. It leaves unvoiced
+consonant releases unchanged. Since the motor normalizes simultaneous tone
+weights, isolated single-tone whistles reduce output level explicitly.
+Synthetic tests verify the changes while speaker WAVs confirm bounded output.
+Improved intelligibility and absence of ringing still require listening tests.

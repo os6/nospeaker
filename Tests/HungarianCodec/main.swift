@@ -71,4 +71,42 @@ verify(HungarianAudioFeatures.measure(samples: sine(340)).fundamentalHz != nil,
        "higher-pitched Hungarian voice is analyzed before motor ceiling")
 
 
+
+// Detect a spurious high frequency that occurs for one 5 ms frame.
+func vowelFrame(_ upperHz: Double) -> SpeechFrame {
+    var frame = SpeechFrame()
+    frame.voiced = true
+    frame.level = 0.6
+    frame.hungarianTones = [(hz: 650, amp: 1), (hz: upperHz, amp: 0.8)]
+    return frame
+}
+
+var ringingFrames = [vowelFrame(2200), vowelFrame(2270),
+                     vowelFrame(3800), vowelFrame(2210), vowelFrame(2200)]
+HungarianToneStabilizer.stabilize(&ringingFrames)
+verify(ringingFrames[2].hungarianTones[1].amp <= 0.2,
+       "isolated high-frequency whistles must be attenuated")
+var coherentFrames = [vowelFrame(2200), vowelFrame(2270), vowelFrame(2210)]
+HungarianToneStabilizer.stabilize(&coherentFrames)
+verify(coherentFrames[1].hungarianTones[1].hz < 2270,
+       "coherent upper spectral peaks should be temporally smoothed")
+verify(ringingFrames.allSatisfy { $0.hungarianTones.allSatisfy {
+    $0.amp <= 1 && (300...3900).contains($0.hz)
+}}, "ringing suppression must not raise motor amplitude or frequencies")
+
+var singleToneFrames = [vowelFrame(2200), vowelFrame(2300), vowelFrame(2200)]
+singleToneFrames[1].hungarianTones = [(hz: 3800, amp: 1)]
+HungarianToneStabilizer.stabilize(&singleToneFrames)
+verify(singleToneFrames[1].level < 0.6,
+       "single high-frequency whistles must reduce level, not only normalized weight")
+
+
+var releaseFrames = [vowelFrame(2200), SpeechFrame(), vowelFrame(3700)]
+releaseFrames[1].level = 0.4
+releaseFrames[1].voiced = false
+releaseFrames[1].hungarianTones = [(hz: 3700, amp: 1)]
+HungarianToneStabilizer.stabilize(&releaseFrames)
+verify(releaseFrames[1].hungarianTones[0].amp == 1,
+       "unvoiced consonant release must be preserved")
+
 print("PASS: independent Hungarian spectral vocoder, pitch and 5-ms timing")

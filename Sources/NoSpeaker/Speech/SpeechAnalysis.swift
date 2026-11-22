@@ -117,7 +117,7 @@ func analyzeSpeechSamples(_ x: [Float]) -> [SpeechFrame] {
         let lo = max(0, k - 2)
         let hi = min(frames.count - 1, k + 2)
         for j in 0..<3 { frames[k].formants[j] = median((lo...hi).map { raw[$0].formants[j] }) }
-        frames[k].f0 = min(250, max(70, median((lo...hi).map { raw[$0].f0 })))
+        frames[k].f0 = SpeechActuationLimits.cappedPulseRate(median((lo...hi).map { raw[$0].f0 }))
     }
     return frames
 }
