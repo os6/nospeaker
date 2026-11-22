@@ -12,6 +12,18 @@
 - There is no evidence yet that a new text-to-speech voice would improve the
   two-tone representation used by the trackpad.
 
+## Experimental Hungarian encoder changes
+
+- Hungarian amplitude envelope now uses an exponent of 0.95 instead of the
+  original 0.45 compression exponent. This suppresses low-level closure
+  periods relative to vowels and preserves the stop's amplitude contrast.
+- Hungarian formant tracking now applies a 3-frame rather than 5-frame
+  median filter, retaining more of the fast F1/F2 transitions around stops.
+- Both parameters are restricted to Hungarian. English stays byte-for-byte
+  identical in these branches.
+- These are physics-informed candidate improvements, not independently
+  validated human recognition gains. Evaluate through speaker preview.
+
 ## Offline listening and safety
 
 Use this to render the same frequency, relative amplitude, duration, and

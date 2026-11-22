@@ -59,6 +59,10 @@ func analyzeSpeechSamples(_ x: [Float]) -> [SpeechFrame] {
     // Preserve the original English pitch range; the Hungarian voice can be higher.
     let maximumPitchSearchHz = speechLanguage == .hungarian ? 450.0 : 300.0
     let maximumOutputPitchHz = speechLanguage == .hungarian ? 400.0 : 250.0
+    // Unlike the original English setting, Hungarian preserves quiet stop
+    // closures and rapid formant transitions to distinguish palatal stops.
+    let amplitudeExponent = speechLanguage == .hungarian ? 0.95 : 0.45
+    let smoothingRadius = speechLanguage == .hungarian ? 1 : 2
     let hamming = (0..<win).map { 0.54 - 0.46 * cos(2 * .pi * Double($0) / Double(win - 1)) }
     var frames: [SpeechFrame] = [], rmsList: [Double] = []
     var prev = SpeechFrame()
@@ -113,13 +117,14 @@ func analyzeSpeechSamples(_ x: [Float]) -> [SpeechFrame] {
     let peak = rmsList.max() ?? 1
     for k in frames.indices {
         let rel = rmsList[k] / max(peak, 1e-9)
-        frames[k].level = rel < 0.02 ? 0 : Float(min(1, pow(rel, 0.45)))
+        frames[k].level = rel < 0.02 ? 0 : Float(min(1, pow(rel, amplitudeExponent)))
         if frames[k].level == 0 { frames[k].voiced = false }
     }
     func median(_ v: [Double]) -> Double { v.sorted()[v.count / 2] }
     let raw = frames
     for k in frames.indices {
-        let lo = max(0, k - 2), hi = min(frames.count - 1, k + 2)
+        let lo = max(0, k - smoothingRadius)
+        let hi = min(frames.count - 1, k + smoothingRadius)
         for j in 0..<3 { frames[k].formants[j] = median((lo...hi).map { raw[$0].formants[j] }) }
         frames[k].f0 = min(maximumOutputPitchHz, max(70, median((lo...hi).map { raw[$0].f0 })))
     }
