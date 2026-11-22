@@ -60,7 +60,8 @@ cd nospeaker
 
 ## Language / Nyelv
 
-English remains the default (Daniel). Hungarian is optional (Tünde) using the
+English remains the default (using the original macOS default voice). Hungarian
+is optional (Tünde) using the
 macOS built-in voices; download Tünde in macOS voice settings if it is missing.
 
 ```sh

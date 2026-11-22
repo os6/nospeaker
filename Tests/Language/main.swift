@@ -11,8 +11,11 @@ expect(SpeechLanguage.defaultLanguage == .english, "English must remain the defa
 expect(SpeechLanguage(rawValue: "en") == .english, "English CLI identifier")
 expect(SpeechLanguage(rawValue: "hu") == .hungarian, "Hungarian CLI identifier")
 expect(SpeechLanguage(rawValue: "de") == nil, "Unsupported language must fail")
-expect(SpeechLanguage.english.systemVoiceName == "Daniel", "English system voice")
+expect(SpeechLanguage.english.systemVoiceName == nil, "English retains the original default system voice")
 expect(SpeechLanguage.hungarian.systemVoiceName == "Tünde", "Hungarian system voice")
+expect(SpeechLanguage.english.selectedVoiceName(overriding: nil) == nil, "Original English voice selection")
+expect(SpeechLanguage.english.selectedVoiceName(overriding: "Daniel") == "Daniel", "Explicit English voice override")
+expect(SpeechLanguage.hungarian.selectedVoiceName(overriding: nil) == "Tünde", "Hungarian default selection")
 
 let englishDemo = SpeechLanguage.english.demoText
 let hungarianDemo = SpeechLanguage.hungarian.demoText

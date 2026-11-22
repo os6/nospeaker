@@ -49,8 +49,8 @@ guard let chosenLanguage = SpeechLanguage(rawValue: requestedLanguage) else {
 }
 speechLanguage = chosenLanguage
 voiceOverrideName = takeOption("--voice", example: "Daniel")
-let selectedVoice = voiceOverrideName ?? speechLanguage.systemVoiceName
-if !isSystemVoiceAvailable(selectedVoice) {
+let selectedVoice = speechLanguage.selectedVoiceName(overriding: voiceOverrideName)
+if let selectedVoice, !isSystemVoiceAvailable(selectedVoice) {
     fail("There's no voice called \"\(selectedVoice)\" on this Mac.\nList the voices you have with: say -v '?'", headline: "nospeaker can't use that voice.", code: 64)
 }
 applyTheme(light: !takeFlag("--dark"))

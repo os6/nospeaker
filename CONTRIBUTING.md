@@ -25,7 +25,8 @@ Prefer names that describe intent at the call site. Conventional audio and
 signal-processing terminology (F0, F1, F2, Hz) is acceptable where standard.
 Do not duplicate language-dependent strings outside SpeechLanguage.swift.
 
-English must remain the default, with Hungarian opt-in through --lang hu.
+English must remain the default and use the original system voice, with Hungarian
+opt-in through --lang hu using Tünde.
 Do not change the trackpad actuation limits or increase motor output in a
 localization PR.
 

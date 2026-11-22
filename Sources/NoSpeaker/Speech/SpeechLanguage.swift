@@ -7,11 +7,16 @@ enum SpeechLanguage: String, CaseIterable {
 
     static let defaultLanguage: SpeechLanguage = .english
 
-    var systemVoiceName: String {
+    /// English retains the original macOS default voice; Hungarian selects Tünde.
+    var systemVoiceName: String? {
         switch self {
-        case .english: return "Daniel"
+        case .english: return nil
         case .hungarian: return "Tünde"
         }
+    }
+
+    func selectedVoiceName(overriding overrideName: String?) -> String? {
+        overrideName ?? systemVoiceName
     }
 
     var demoText: DemoText {
