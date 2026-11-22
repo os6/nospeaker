@@ -26,6 +26,18 @@ if [ "$invalid_language_status" -ne 64 ] || [ "$invalid_voice_status" -ne 64 ]; 
 fi
 echo 'PASS: CLI help and unsupported-option handling (without actuating the motor)'
 
+# The preview branch generates WAV files without opening the trackpad motor.
+preview_directory=$(mktemp -d -t nospeaker-preview-tests)
+trap 'rm -f "$binary"; rm -rf "$preview_directory"' EXIT
+./nospeaker --lang hu --preview-wav "$preview_directory/hungarian.wav" "Hogy vagy?" >/dev/null
+./nospeaker --preview-wav "$preview_directory/english.wav" "How are you?" >/dev/null
+test -s "$preview_directory/hungarian.wav"
+test -s "$preview_directory/english.wav"
+afinfo "$preview_directory/hungarian.wav" | grep -q '16000 Hz'
+afinfo "$preview_directory/english.wav" | grep -q '16000 Hz'
+echo 'PASS: English and Hungarian speaker WAVs rendered without motor activation'
+
+
 oversized=$(find Sources/NoSpeaker -name '*.swift' -print |
     while IFS= read -r file; do
         lines=$(wc -l < "$file" | tr -d ' ')

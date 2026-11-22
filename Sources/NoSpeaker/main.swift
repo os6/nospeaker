@@ -31,6 +31,8 @@ if takeFlag("--help") || takeFlag("-h") {
       nospeaker "hello there"         speak English (default)
       nospeaker --lang hu "Szia!"      speak Hungarian
       nospeaker --lang en "Hello"      speak English explicitly
+      nospeaker --preview --lang hu "Szia!"  hear the motor signal on speakers
+      nospeaker --preview-wav sound.wav "hello"  export the simulated signal
       nospeaker --sweep                 a rising tone, 100 Hz to 4 kHz
       --lang en|hu                     speech language (default: en)
       --voice Daniel                   any voice from `say -v '?'`
@@ -56,11 +58,38 @@ if let selectedVoice, !isSystemVoiceAvailable(selectedVoice) {
 applyTheme(light: !takeFlag("--dark"))
 let plain = takeFlag("--plain")
 let wantsSweep = takeFlag("--sweep")
+let wantsSpeakerPreview = takeFlag("--preview")
+let previewFilePath = takeOption("--preview-wav", example: "preview.wav")
 if let unknown = remainingArguments.first(where: { $0.hasPrefix("-") }) { usageError("\"\(unknown)\" isn't an option.") }
 
 signal(SIGINT) { _ in requestEnd() }
 signal(SIGTERM) { _ in stopRequested = true }
 atexit { restoreTerminal() }
+
+if wantsSpeakerPreview || previewFilePath != nil {
+    guard !wantsSweep, !remainingArguments.isEmpty else {
+        usageError("Speaker preview requires text and cannot be combined with --sweep.")
+    }
+    let phrase = remainingArguments.joined(separator: " ")
+    let speechFrames = synthesizeSpeechFrames(phrase)
+    let outputURL = previewFilePath.map { URL(fileURLWithPath: $0) } ??
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("nospeaker-preview-\(getpid()).wav")
+    do {
+        try SpeakerPreview.render(speechFrames, to: outputURL)
+        if wantsSpeakerPreview {
+            print("Speaker preview (no trackpad): \(phrase)")
+            try SpeakerPreview.play(outputURL)
+        } else {
+            print("WAV preview saved: \(outputURL.path)")
+        }
+    } catch {
+        if previewFilePath == nil { try? FileManager.default.removeItem(at: outputURL) }
+        fail(error.localizedDescription, headline: "Speaker preview failed.")
+    }
+    if previewFilePath == nil { try? FileManager.default.removeItem(at: outputURL) }
+    exit(0)
+}
 
 motor = openMotor()
 motorPointer = Unmanaged.passUnretained(motor! as AnyObject).toOpaque()

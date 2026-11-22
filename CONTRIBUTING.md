@@ -33,5 +33,8 @@ localization PR.
 ## Verification
 
 Run ./build.sh and ./scripts/test.sh before submitting.
-For voice playback, manually check both English and Hungarian on a Force Touch
-trackpad. Automated checks must not repeatedly actuate the hardware.
+Use --preview or --preview-wav to compare motor-command audio on speakers,
+without actuating hardware. A speaker preview does not model the real motor
+and should not be described as acoustically identical to the trackpad.
+Only after validating preview recordings should a brief manual trackpad
+listening check be considered; never automate repeated hardware actuation.

@@ -36,33 +36,20 @@ func playFrequencySweep(seconds: Double = 6) {
 
 func playSpeech(_ frames: [SpeechFrame], text: String) {
     guard !frames.isEmpty else { return }
-    let total = Double(frames.count) * hop
-    caption(text, seconds: total)
-    let start = mach_absolute_time()
-    var t = 0.0
-    while t < total && !interrupted() {
-        let f = frames[min(frames.count - 1, Int(t / hop))]
-        var step = 0.005
-        if f.level > 0 {
-            if f.voiced {
-                step = 1 / f.f0
-                playHapticTones(formantTones(f), ms: step * 1000, level: f.level)
-                updateLiveState { $0.f0 = f.f0; $0.f1 = f.formants[0]; $0.f2 = f.formants[1] }
-            } else {
-                step = 0.004
-                if speechLanguage == .hungarian {
-                    if !f.consonantTones.isEmpty {
-                        playHapticTones(f.consonantTones, ms: step * 1000, level: f.level * 0.7)
-                    }
-                } else {
-                    // Retain the original English consonant rendering.
-                    playHapticTones((0..<3).map { _ in (Double.random(in: 2700...4300), 1.0) },
-                                    ms: step * 1000, level: f.level * 0.7)
-                }
+    caption(text, seconds: Double(frames.count) * hop)
+    let playbackStart = mach_absolute_time()
+    enumerateSpeechActuations(frames, realtime: true) { startSeconds, actuation in
+        playHapticTones(actuation.tones, ms: actuation.durationSeconds * 1000,
+                        level: actuation.level)
+        if actuation.isVoiced {
+            updateLiveState {
+                $0.f0 = actuation.pitchHz
+                $0.f1 = actuation.firstFormantHz
+                $0.f2 = actuation.secondFormantHz
             }
         }
-        t += step
-        waitUntil(start + UInt64(t * ticksPerSecond))
+    } waitForTime: { elapsedSeconds in
+        waitUntil(playbackStart + UInt64(elapsedSeconds * ticksPerSecond))
     }
     updateLiveState { $0.f0 = 0; $0.f1 = 0; $0.f2 = 0 }
 }

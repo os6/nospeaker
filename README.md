@@ -80,6 +80,23 @@ measured from Tünde's synthesized audio. This aims to preserve distinctions
 between consonants on the trackpad. The English synthesis path is unchanged.
 The trackpad's limited acoustic bandwidth still constrains intelligibility.
 
+## Test without actuating the trackpad
+
+The program can render its haptic sine-tone commands to a regular speaker as
+an **approximation**. This previews the frequencies, timing and relative
+amplitudes sent to the motor, but does **not** reproduce the physical
+trackpad's mechanical response. The preview mode does not open or activate
+the trackpad motor.
+
+```sh
+./nospeaker --lang hu --preview "Hogy vagy?"
+./nospeaker --lang en --preview "How are you?"
+./nospeaker --lang hu --preview-wav hungarian.wav "Hogy vagy?"
+```
+
+Playback is capped at 20 seconds of synthesized speech per preview, with a
+conservative waveform level. WAV export supports repeatable offline testing.
+
 ## 03 / play with it
 
 ```text
