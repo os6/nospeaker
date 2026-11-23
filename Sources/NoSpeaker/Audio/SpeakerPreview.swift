@@ -44,13 +44,25 @@ enum SpeakerPreview {
         try audioFile.write(from: buffer)
     }
 
-    static func play(_ audioURL: URL) throws {
+    static func play(
+        _ audioURL: URL, onTime: ((Double) -> Void)? = nil
+    ) throws {
         let audioPlayer = Process()
         audioPlayer.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
         audioPlayer.arguments = [audioURL.path]
         try audioPlayer.run()
+        let start = now()
+        while audioPlayer.isRunning && !interrupted() {
+            onTime?(now() - start)
+            usleep(12_000)
+        }
+        if interrupted() && audioPlayer.isRunning {
+            audioPlayer.terminate()
+        }
         audioPlayer.waitUntilExit()
-        guard audioPlayer.terminationStatus == 0 else { throw PreviewError.playbackFailed }
+        if !interrupted() && audioPlayer.terminationStatus != 0 {
+            throw PreviewError.playbackFailed
+        }
     }
 }
 

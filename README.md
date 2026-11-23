@@ -58,6 +58,46 @@ cd nospeaker
 ./nospeaker
 ```
 
+## Native macOS app
+
+NoSpeaker includes a SwiftUI macOS app with a text editor, Hungarian/English
+speech selection, trackpad/speaker output selection, play/stop controls and
+highlighted words during playback. The existing NoSpeaker audio engine is reused
+without changes to its speech coding. Word highlighting uses the macOS voice
+synthesizer's word events aligned with the motor's playback timeline.
+
+Build and open it from the repository (Xcode required; XcodeGen optional when
+the checked-in Xcode project is present):
+
+~~~sh
+./scripts/build-app.sh
+open build/MacApp/Build/Products/Release/NoSpeaker.app
+~~~
+
+The local build uses an ad-hoc signature, not Developer ID notarization.
+macOS 13 or newer is supported. On macOS 26 or newer SwiftUI uses native
+Liquid Glass button styles and the native segmented picker/toolbar menus;
+older macOS releases use standard native bordered controls.
+
+The upper-right menus select **display language** (System, Magyar, English)
+and **appearance** (System, Light, Dark). Both preferences persist and default
+to System. Display language is separate from speech language. To add another
+display language, add an InterfaceLanguage case and the matching translations
+in MacApp/Resources/Localizable.xcstrings.
+
+The System appearance resolves the macOS effective appearance explicitly
+and observes system appearance changes. This avoids the stale theme that
+can result from applying preferredColorScheme(nil) after a Light override.
+Native controls use the existing orange accent and respect macOS accessibility
+preferences, including Reduce Motion.
+
+For regression testing without the haptic motor:
+
+~~~sh
+./scripts/test.sh
+python3 scripts/test-word-events.py
+~~~
+
 ## Language / Nyelv
 
 English remains the default (using the original macOS default voice). Hungarian

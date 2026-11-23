@@ -93,3 +93,9 @@ if [ -n "$oversized" ]; then
     exit 1
 fi
 echo 'PASS: all Swift source files are at most 200 lines'
+
+swiftc MacApp/Sources/AppPreferences.swift \
+    MacApp/Sources/SystemAppearanceMonitor.swift \
+    Tests/AppPreferences/main.swift -o "$binary"
+"$binary"
+python3 scripts/test-app-resources.py

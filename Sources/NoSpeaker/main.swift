@@ -36,6 +36,8 @@ if takeFlag("--help") || takeFlag("-h") {
       nospeaker --lang hu --phonemes "Hogy vagy?"  approximate Hungarian IPA
       nospeaker --sweep                 a rising tone, 100 Hz to 4 kHz
       --lang en|hu                     speech language (default: en)
+      --stdin                          read UTF-8 text from standard input
+      --word-events                    stream word positions for the native app
       --voice Daniel                   any voice from `say -v '?'`
       --dark                            white on black instead of black on white
       --plain                           no visuals
@@ -62,36 +64,65 @@ let wantsSweep = takeFlag("--sweep")
 let wantsSpeakerPreview = takeFlag("--preview")
 let previewFilePath = takeOption("--preview-wav", example: "preview.wav")
 let wantsPhonemes = takeFlag("--phonemes")
+let wantsStandardInput = takeFlag("--stdin")
+let wantsWordEvents = takeFlag("--word-events")
 if let unknown = remainingArguments.first(where: { $0.hasPrefix("-") }) { usageError("\"\(unknown)\" isn't an option.") }
+if wantsStandardInput && !remainingArguments.isEmpty {
+    usageError("--stdin cannot be combined with text arguments.")
+}
+let inputText = wantsStandardInput ?
+    String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) :
+    remainingArguments.joined(separator: " ")
+if wantsStandardInput && inputText == nil {
+    usageError("--stdin requires valid UTF-8 text.")
+}
+let spokenText = inputText ?? ""
+if wantsWordEvents && spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+    usageError("--word-events requires nonempty text.")
+}
 
 signal(SIGINT) { _ in requestEnd() }
 signal(SIGTERM) { _ in stopRequested = true }
 atexit { restoreTerminal() }
 
 if wantsPhonemes {
-    guard speechLanguage == .hungarian, !remainingArguments.isEmpty,
-          !wantsSweep, !wantsSpeakerPreview, previewFilePath == nil else {
+    guard speechLanguage == .hungarian, !spokenText.isEmpty,
+          !wantsSweep, !wantsSpeakerPreview, previewFilePath == nil,
+          !wantsWordEvents else {
         usageError("--phonemes requires --lang hu and text, without playback options.")
     }
-    let phrase = remainingArguments.joined(separator: " ")
-    print("Hungarian phoneme inventory (approximate IPA): /\(HungarianPhonology.approximateIPA(phrase))/")
+    print("Hungarian phoneme inventory (approximate IPA): /\(HungarianPhonology.approximateIPA(spokenText))/")
     exit(0)
 }
 
 if wantsSpeakerPreview || previewFilePath != nil {
-    guard !wantsSweep, !remainingArguments.isEmpty else {
+    guard !wantsSweep, !spokenText.isEmpty else {
         usageError("Speaker preview requires text and cannot be combined with --sweep.")
     }
-    let phrase = remainingArguments.joined(separator: " ")
-    let speechFrames = synthesizeSpeechFrames(phrase)
+    let speechFrames = synthesizeSpeechFrames(spokenText)
+    let duration = Double(speechFrames.count) * (speechFrames.first?.frameIntervalSeconds ?? 0)
+    let progress = wantsWordEvents ? SpeechWordProgress(
+        words: SpeechWordTimeline().build(
+            text: spokenText, voiceName: selectedVoice,
+            playbackDuration: duration
+        ), duration: duration
+    ) : nil
     let outputURL = previewFilePath.map { URL(fileURLWithPath: $0) } ??
         FileManager.default.temporaryDirectory
             .appendingPathComponent("nospeaker-preview-\(getpid()).wav")
     do {
         try SpeakerPreview.render(speechFrames, to: outputURL)
         if wantsSpeakerPreview {
-            print("Speaker preview (no trackpad): \(phrase)")
-            try SpeakerPreview.play(outputURL)
+            if interrupted() {
+                progress?.finish(stopped: true)
+                exit(0)
+            }
+            if !wantsWordEvents {
+                print("Speaker preview (no trackpad): \(spokenText)")
+            }
+            progress?.start()
+            try SpeakerPreview.play(outputURL) { progress?.advance(to: $0) }
+            progress?.finish(stopped: interrupted())
         } else {
             print("WAV preview saved: \(outputURL.path)")
         }
@@ -106,14 +137,26 @@ if wantsSpeakerPreview || previewFilePath != nil {
 motor = openMotor()
 motorPointer = Unmanaged.passUnretained(motor! as AnyObject).toOpaque()
 
-if wantsSweep || !remainingArguments.isEmpty {
+if wantsSweep || !spokenText.isEmpty {
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
     if wantsSweep { print("sweeping 100 Hz → 4 kHz…"); playFrequencySweep(seconds: 5) }
-    if !remainingArguments.isEmpty {
-        let text = remainingArguments.joined(separator: " ")
-        let frames = synthesizeSpeechFrames(text)
-        print("trackpad: “\(text)”")
-        playSpeech(frames, text: text)
+    if !spokenText.isEmpty {
+        let frames = synthesizeSpeechFrames(spokenText)
+        let duration = Double(frames.count) * (frames.first?.frameIntervalSeconds ?? 0)
+        let progress = wantsWordEvents ? SpeechWordProgress(
+            words: SpeechWordTimeline().build(
+                text: spokenText, voiceName: selectedVoice,
+                playbackDuration: duration
+            ), duration: duration
+        ) : nil
+        if interrupted() {
+            progress?.finish(stopped: true)
+            exit(0)
+        }
+        if !wantsWordEvents { print("trackpad: “\(spokenText)”") }
+        progress?.start()
+        playSpeech(frames, text: spokenText) { progress?.advance(to: $0) }
+        progress?.finish(stopped: interrupted())
     }
 } else {
     let interactive = isatty(STDOUT_FILENO) == 1 && isatty(STDIN_FILENO) == 1
