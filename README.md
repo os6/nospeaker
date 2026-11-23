@@ -75,9 +75,13 @@ open build/MacApp/Build/Products/Release/NoSpeaker.app
 ~~~
 
 The local build uses an ad-hoc signature, not Developer ID notarization.
-macOS 13 or newer is supported. On macOS 26 or newer SwiftUI uses native
-Liquid Glass button styles and the native segmented picker/toolbar menus;
-older macOS releases use standard native bordered controls.
+macOS 13 or newer is supported. On macOS 26 or newer the speech language
+selector is a native Menu with a Liquid Glass button style. The audio output
+control uses Apple's GlassEffectContainer, interactive tinted Glass material,
+and a smoothly morphing selection capsule. These are native SwiftUI effects,
+not simulated blur or a third-party widget. The playback buttons and toolbar
+also use native Glass styles. Older macOS releases keep a native bordered
+menu and segmented Picker.
 
 The upper-right menus select **display language** (System, Magyar, English)
 and **appearance** (System, Light, Dark). Both preferences persist and default

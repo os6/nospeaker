@@ -22,5 +22,19 @@ for source in sources:
     count = len(source.read_text(encoding="utf-8").splitlines())
     assert count <= 200, f"{source}: {count} lines, max 200"
 
+# Both controls must use actual Apple Glass APIs while retaining a
+# macOS 13–25 fallback; otherwise a style regression can look correct on CI.
+language_menu = (root / "MacApp/Sources/SpeechLanguageMenu.swift").read_text()
+output_selector = (root / "MacApp/Sources/GlassOutputSelector.swift").read_text()
+assert "if #available(macOS 26.0, *)" in language_menu
+assert ".buttonStyle(.glass)" in language_menu
+assert ".menuStyle(.button)" in language_menu
+assert "if #available(macOS 26.0, *)" in output_selector
+assert "GlassEffectContainer" in output_selector
+assert ".glassEffect(" in output_selector
+assert ".matchedGeometryEffect(" in output_selector
+assert ".pickerStyle(.segmented)" in output_selector
+
 print(f"PASS: {len(catalog['strings'])} localized keys, en/hu translations")
 print(f"PASS: {len(sources)} SwiftUI source files, all at most 200 lines")
+print("PASS: native Glass menus and output selector, older macOS fallbacks")

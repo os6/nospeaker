@@ -9,7 +9,6 @@ extension ContentView {
 private struct SidebarContent: View {
     @ObservedObject var player: PlaybackController
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 30) {
@@ -31,30 +30,17 @@ private struct SidebarContent: View {
 
             VStack(alignment: .leading, spacing: 22) {
                 configuration("Speech language") {
-                    Picker("Speech language", selection: $player.language) {
-                        ForEach(SpeechChoice.allCases) { choice in
-                            Text(choice.title).tag(choice)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .disabled(player.status.isBusy)
+                    SpeechLanguageMenu(
+                        selection: $player.language,
+                        isDisabled: player.status.isBusy
+                    )
                 }
 
                 configuration("Audio output") {
-                    Picker("Audio output", selection: $player.output) {
-                        ForEach(SoundOutput.allCases) { output in
-                            Text(output.title).tag(output)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .controlSize(.large)
-                    .animation(
-                        reduceMotion ? nil : .smooth(duration: 0.24),
-                        value: player.output
+                    GlassOutputSelector(
+                        selection: $player.output,
+                        isDisabled: player.status.isBusy
                     )
-                    .disabled(player.status.isBusy)
                 }
             }
 
