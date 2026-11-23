@@ -22,19 +22,29 @@ for source in sources:
     count = len(source.read_text(encoding="utf-8").splitlines())
     assert count <= 200, f"{source}: {count} lines, max 200"
 
-# Both controls must use actual Apple Glass APIs while retaining a
-# macOS 13–25 fallback; otherwise a style regression can look correct on CI.
+# Use the same native control families as macOS Calendar and the toolbar.
+# Keep one selected bezel, not a custom stacked Glass capsule.
 language_menu = (root / "MacApp/Sources/SpeechLanguageMenu.swift").read_text()
-output_selector = (root / "MacApp/Sources/GlassOutputSelector.swift").read_text()
-assert "if #available(macOS 26.0, *)" in language_menu
-assert ".buttonStyle(.glass)" in language_menu
+output_selector = (root / "MacApp/Sources/NativeOutputSelector.swift").read_text()
+delegate = (root / "MacApp/Sources/NoSpeakerAppDelegate.swift").read_text()
+play_button = (root / "MacApp/Sources/AdaptivePlaybackButton.swift").read_text()
+elastic_feedback = (root / "MacApp/Sources/ElasticGlassFeedback.swift").read_text()
+
+assert "NSSegmentedControl(" in output_selector
+assert ".segmentStyle = .automatic" in output_selector
+assert "control.selectedSegmentBezelColor" in output_selector
+assert "NSGlassEffectView" not in output_selector
+assert "DragGesture" not in output_selector
+assert "Menu {" in language_menu
 assert ".menuStyle(.button)" in language_menu
-assert "if #available(macOS 26.0, *)" in output_selector
-assert "GlassEffectContainer" in output_selector
-assert ".glassEffect(" in output_selector
-assert ".matchedGeometryEffect(" in output_selector
-assert ".pickerStyle(.segmented)" in output_selector
+assert ".buttonStyle(.glass)" in language_menu
+assert "glassEffect(" not in language_menu
+assert ".modifier(ElasticGlassFeedback(isEnabled: isEnabled))" in play_button
+assert ".highPriorityGesture(" in elastic_feedback
+assert ".accessibilityReduceMotion" in elastic_feedback
+assert "applicationShouldTerminateAfterLastWindowClosed" in delegate
+assert "playback?.stop()" in delegate
 
 print(f"PASS: {len(catalog['strings'])} localized keys, en/hu translations")
 print(f"PASS: {len(sources)} SwiftUI source files, all at most 200 lines")
-print("PASS: native Glass menus and output selector, older macOS fallbacks")
+print("PASS: native macOS segmented control and menu, close-to-quit")

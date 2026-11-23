@@ -34,13 +34,15 @@ private struct SidebarContent: View {
                         selection: $player.language,
                         isDisabled: player.status.isBusy
                     )
+                    .frame(width: 142, height: 38, alignment: .leading)
                 }
 
                 configuration("Audio output") {
-                    GlassOutputSelector(
+                    NativeOutputSelector(
                         selection: $player.output,
                         isDisabled: player.status.isBusy
                     )
+                    .frame(width: 210, height: 38, alignment: .leading)
                 }
             }
 

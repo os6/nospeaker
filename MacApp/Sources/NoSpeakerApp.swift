@@ -2,6 +2,8 @@ import SwiftUI
 
 @main
 struct NoSpeakerApp: App {
+    @NSApplicationDelegateAdaptor(NoSpeakerAppDelegate.self)
+    private var applicationDelegate
     @StateObject private var player = PlaybackController()
     @StateObject private var systemAppearance = SystemAppearanceMonitor()
     @AppStorage("displayLanguage") private var displayLanguage = "system"
@@ -29,6 +31,7 @@ struct NoSpeakerApp: App {
             .environment(\.locale, selectedLanguage.locale)
             .preferredColorScheme(resolvedScheme)
             .frame(minWidth: 810, minHeight: 540)
+            .onAppear { applicationDelegate.playback = player }
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 1000, height: 660)

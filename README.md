@@ -75,13 +75,17 @@ open build/MacApp/Build/Products/Release/NoSpeaker.app
 ~~~
 
 The local build uses an ad-hoc signature, not Developer ID notarization.
-macOS 13 or newer is supported. On macOS 26 or newer the speech language
-selector is a native Menu with a Liquid Glass button style. The audio output
-control uses Apple's GlassEffectContainer, interactive tinted Glass material,
-and a smoothly morphing selection capsule. These are native SwiftUI effects,
-not simulated blur or a third-party widget. The playback buttons and toolbar
-also use native Glass styles. Older macOS releases keep a native bordered
-menu and segmented Picker.
+macOS 13 or newer is supported. The trackpad/speaker selector is the
+native AppKit NSSegmentedControl, the same control family used by Calendar.
+AppKit owns its interaction, geometry, and OS-specific animations; there is
+no custom Glass capsule, nested Glass material or simulated enlargement.
+The speech-language selector is a native SwiftUI Menu using the same Glass
+button style as the toolbar on supported macOS versions. Older versions
+retain the system's native bordered menu style.
+
+The Play/Stop buttons have bounded, reversible drag feedback that does not
+trigger playback. Reduce Motion is respected. Closing the last window quits
+the app and ends any running child audio process.
 
 The upper-right menus select **display language** (System, Magyar, English)
 and **appearance** (System, Light, Dark). Both preferences persist and default

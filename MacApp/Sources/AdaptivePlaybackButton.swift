@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Use the actual Liquid Glass button styles on modern macOS, with the
-/// platform-native bordered styles on older supported systems.
+/// Interactive native Glass on macOS 27, stock Glass on macOS 26, and
+/// standard bordered controls for earlier supported macOS versions.
 struct AdaptivePlaybackButton: View {
     let title: LocalizedStringKey
     let symbol: String
@@ -13,7 +13,18 @@ struct AdaptivePlaybackButton: View {
 
     var body: some View {
         Group {
-            if #available(macOS 26.0, *) {
+            if #available(macOS 27.0, *) {
+                button
+                    .buttonStyle(.plain)
+                    .glassEffect(
+                        isPrimary ?
+                            .regular.tint(StudioStyle.accent(for: colorScheme))
+                                .interactive() :
+                            .regular.interactive(),
+                        in: .capsule
+                    )
+                    .modifier(ElasticGlassFeedback(isEnabled: isEnabled))
+            } else if #available(macOS 26.0, *) {
                 if isPrimary {
                     button
                         .buttonStyle(.glassProminent)
@@ -21,14 +32,12 @@ struct AdaptivePlaybackButton: View {
                 } else {
                     button.buttonStyle(.glass)
                 }
+            } else if isPrimary {
+                button
+                    .buttonStyle(.borderedProminent)
+                    .tint(StudioStyle.accent(for: colorScheme))
             } else {
-                if isPrimary {
-                    button
-                        .buttonStyle(.borderedProminent)
-                        .tint(StudioStyle.accent(for: colorScheme))
-                } else {
-                    button.buttonStyle(.bordered)
-                }
+                button.buttonStyle(.bordered)
             }
         }
         .controlSize(.large)
@@ -38,7 +47,11 @@ struct AdaptivePlaybackButton: View {
     private var button: some View {
         Button(action: action) {
             Label(title, systemImage: symbol)
-                .frame(minWidth: isPrimary ? 125 : 0)
+                .foregroundStyle(isPrimary ? .white : .primary)
+                .frame(minWidth: isPrimary ? 125 : 0, minHeight: 29)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 3)
+                .contentShape(Capsule())
         }
     }
 }

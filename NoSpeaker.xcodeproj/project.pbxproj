@@ -9,17 +9,19 @@
 /* Begin PBXBuildFile section */
 		0898F6C37D1142D9E478BC18 /* PlaybackTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = B76DB448587A140384E4A5F5 /* PlaybackTypes.swift */; };
 		347F25C809F2B6D3E8273232 /* SystemAppearanceMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 219D79048C93D7A785E1C96F /* SystemAppearanceMonitor.swift */; };
+		392E3076D7AD5B41A6497E51 /* ElasticGlassFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD3812CC43E33045E3156FA8 /* ElasticGlassFeedback.swift */; };
 		3DA75F5498726FC78B83DB22 /* AdaptivePlaybackButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 099D29045F52DE5B17D0FD8E /* AdaptivePlaybackButton.swift */; };
 		50C365B6C9AE935F562DDA1A /* PlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C67B6F4E5BA6736F7AF112C /* PlaybackController.swift */; };
+		6DD0BE29565DC8220FCC9A9F /* NoSpeakerAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1284BAF92EAA69F70CA80B0 /* NoSpeakerAppDelegate.swift */; };
 		749DAC5191C06B8F8FDA5F23 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6DAF9F536188D5357CDAA62B /* Assets.xcassets */; };
 		7F79E2EF5CF5DF46FFCEC1ED /* AppPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ABD44EC517299E68FD6981D /* AppPreferences.swift */; };
 		841066E494114A47BC66D76B /* WordTrackingEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCFAF4DBD787306A168B4B6D /* WordTrackingEditor.swift */; };
-		8C126B94999D977786A11D23 /* GlassOutputSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41A1D8548AD717A6D667A926 /* GlassOutputSelector.swift */; };
 		AB3E912DCE5032F0640E3DF1 /* SpeechLanguageMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0FCD96A532A0A31E787A42E /* SpeechLanguageMenu.swift */; };
 		AEF2EA5BEA7A21BD676E801C /* NoSpeakerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B84B25E135CF8E8CE79E154 /* NoSpeakerApp.swift */; };
 		B650BCCD86457DA1D5DE66EC /* ContentView+Sidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C631691DFBF0BA46EAE1AECB /* ContentView+Sidebar.swift */; };
 		B82C825476279358CD4171FD /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = EB430FE1CD9F6ADF7BDC80FA /* Localizable.xcstrings */; };
 		BACF14E9B583F1DD77E647F1 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 560B0E4B9297F954C24E8809 /* ContentView.swift */; };
+		D030A71349F973CDE8D0704C /* NativeOutputSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F971A8284D673415AEF819E /* NativeOutputSelector.swift */; };
 		DCFB5E86B351F6096E5351E9 /* AppearanceToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 176F663624BB4702E5AA05B3 /* AppearanceToolbar.swift */; };
 /* End PBXBuildFile section */
 
@@ -29,12 +31,14 @@
 		176F663624BB4702E5AA05B3 /* AppearanceToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceToolbar.swift; sourceTree = "<group>"; };
 		219D79048C93D7A785E1C96F /* SystemAppearanceMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAppearanceMonitor.swift; sourceTree = "<group>"; };
 		3B84B25E135CF8E8CE79E154 /* NoSpeakerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoSpeakerApp.swift; sourceTree = "<group>"; };
-		41A1D8548AD717A6D667A926 /* GlassOutputSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassOutputSelector.swift; sourceTree = "<group>"; };
 		560B0E4B9297F954C24E8809 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		5ABD44EC517299E68FD6981D /* AppPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppPreferences.swift; sourceTree = "<group>"; };
 		6DAF9F536188D5357CDAA62B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		9F971A8284D673415AEF819E /* NativeOutputSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeOutputSelector.swift; sourceTree = "<group>"; };
 		A026D931E391189A09069D80 /* NoSpeaker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NoSpeaker.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B1284BAF92EAA69F70CA80B0 /* NoSpeakerAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoSpeakerAppDelegate.swift; sourceTree = "<group>"; };
 		B76DB448587A140384E4A5F5 /* PlaybackTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackTypes.swift; sourceTree = "<group>"; };
+		BD3812CC43E33045E3156FA8 /* ElasticGlassFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ElasticGlassFeedback.swift; sourceTree = "<group>"; };
 		C631691DFBF0BA46EAE1AECB /* ContentView+Sidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ContentView+Sidebar.swift"; sourceTree = "<group>"; };
 		D0FCD96A532A0A31E787A42E /* SpeechLanguageMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechLanguageMenu.swift; sourceTree = "<group>"; };
 		DCFAF4DBD787306A168B4B6D /* WordTrackingEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordTrackingEditor.swift; sourceTree = "<group>"; };
@@ -77,8 +81,10 @@
 				5ABD44EC517299E68FD6981D /* AppPreferences.swift */,
 				560B0E4B9297F954C24E8809 /* ContentView.swift */,
 				C631691DFBF0BA46EAE1AECB /* ContentView+Sidebar.swift */,
-				41A1D8548AD717A6D667A926 /* GlassOutputSelector.swift */,
+				BD3812CC43E33045E3156FA8 /* ElasticGlassFeedback.swift */,
+				9F971A8284D673415AEF819E /* NativeOutputSelector.swift */,
 				3B84B25E135CF8E8CE79E154 /* NoSpeakerApp.swift */,
+				B1284BAF92EAA69F70CA80B0 /* NoSpeakerAppDelegate.swift */,
 				0C67B6F4E5BA6736F7AF112C /* PlaybackController.swift */,
 				B76DB448587A140384E4A5F5 /* PlaybackTypes.swift */,
 				D0FCD96A532A0A31E787A42E /* SpeechLanguageMenu.swift */,
@@ -194,8 +200,10 @@
 				DCFB5E86B351F6096E5351E9 /* AppearanceToolbar.swift in Sources */,
 				B650BCCD86457DA1D5DE66EC /* ContentView+Sidebar.swift in Sources */,
 				BACF14E9B583F1DD77E647F1 /* ContentView.swift in Sources */,
-				8C126B94999D977786A11D23 /* GlassOutputSelector.swift in Sources */,
+				392E3076D7AD5B41A6497E51 /* ElasticGlassFeedback.swift in Sources */,
+				D030A71349F973CDE8D0704C /* NativeOutputSelector.swift in Sources */,
 				AEF2EA5BEA7A21BD676E801C /* NoSpeakerApp.swift in Sources */,
+				6DD0BE29565DC8220FCC9A9F /* NoSpeakerAppDelegate.swift in Sources */,
 				50C365B6C9AE935F562DDA1A /* PlaybackController.swift in Sources */,
 				0898F6C37D1142D9E478BC18 /* PlaybackTypes.swift in Sources */,
 				AB3E912DCE5032F0640E3DF1 /* SpeechLanguageMenu.swift in Sources */,

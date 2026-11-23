@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Native menu with a Liquid Glass trigger on supported systems.
-/// The actual options remain platform menus, not a custom popover.
+/// The same native SwiftUI Menu style as the toolbar menus.
+/// macOS owns the Glass animation, button geometry and menu interaction.
 struct SpeechLanguageMenu: View {
     @Binding var selection: SpeechChoice
     let isDisabled: Bool
@@ -46,7 +46,7 @@ struct SpeechLanguageMenu: View {
         } label: {
             Text(selection.title)
                 .font(.system(size: 13, weight: .semibold))
-                .padding(.horizontal, 4)
+                .frame(width: 126, height: 36)
         }
     }
 }
