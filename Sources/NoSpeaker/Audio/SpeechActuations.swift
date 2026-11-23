@@ -12,19 +12,17 @@ struct SpeechActuation {
     let secondFormantHz: Double
 }
 
+/// Both languages use the same LPC speech model; the correctly selected
+/// macOS voice is responsible for their different phonology.
 func actuationForSpeechFrame(_ frame: SpeechFrame) -> SpeechActuation? {
     guard frame.level > 0 else { return nil }
-
+    let profile = speechLanguage.encodingProfile
     if frame.voiced {
-        let duration = 1 / SpeechActuationLimits.cappedPulseRate(frame.f0)
-        let originalTones = speechLanguage == .hungarian &&
-            !frame.hungarianTones.isEmpty ? frame.hungarianTones : formantTones(frame)
-        let tones = speechLanguage == .hungarian
-            ? HungarianPulsePhaseAlignment.tones(originalTones, duration: duration)
-            : originalTones
         return SpeechActuation(
-            tones: tones,
-            durationSeconds: duration,
+            tones: formantTones(
+                frame, secondFormantGain: profile.secondFormantGain
+            ),
+            durationSeconds: 1 / SpeechActuationLimits.cappedPulseRate(frame.f0),
             level: frame.level,
             isVoiced: true,
             pitchHz: frame.f0,
@@ -33,21 +31,23 @@ func actuationForSpeechFrame(_ frame: SpeechFrame) -> SpeechActuation? {
         )
     }
 
-    let consonantTones = speechLanguage == .hungarian
-        ? frame.hungarianTones
-        : (0..<3).map { _ in (hz: Double.random(in: 2700...4300), amp: 1.0) }
-    guard !consonantTones.isEmpty else { return nil }
-    let duration = SpeechActuationLimits.unvoicedPulseDurationSeconds
-    let tones = speechLanguage == .hungarian
-        ? HungarianPulsePhaseAlignment.tones(consonantTones, duration: duration)
-        : consonantTones
-    return SpeechActuation(tones: tones, durationSeconds: duration,
-                           level: frame.level * 0.7, isVoiced: false,
-                           pitchHz: 0, firstFormantHz: 0, secondFormantHz: 0)
+    // Both languages retain the original carrier range: truncating it
+    // degraded consonant recognition in controlled Hungarian tests.
+    let consonantTones = (0..<3).map { _ in
+        (hz: Double.random(in: 2700...4300), amp: 1.0)
+    }
+    return SpeechActuation(
+        tones: consonantTones,
+        durationSeconds: SpeechActuationLimits.unvoicedPulseDurationSeconds,
+        level: frame.level * 0.7,
+        isVoiced: false,
+        pitchHz: 0,
+        firstFormantHz: 0,
+        secondFormantHz: 0
+    )
 }
 
-/// Shared timebase for motor playback and offline speaker preview.
-/// The callback never opens a device; the caller chooses where to send commands.
+/// The same timebase drives both motor playback and speaker preview.
 func enumerateSpeechActuations(
     _ frames: [SpeechFrame],
     realtime: Bool,
@@ -64,7 +64,8 @@ func enumerateSpeechActuations(
         let actuation = actuationForSpeechFrame(frame)
         if let actuation { emit(elapsedSeconds, actuation) }
         let step = actuation?.durationSeconds ??
-            (frame.level > 0 && !frame.voiced ? SpeechActuationLimits.unvoicedPulseDurationSeconds : 0.005)
+            (frame.level > 0 && !frame.voiced ?
+                SpeechActuationLimits.unvoicedPulseDurationSeconds : 0.005)
         elapsedSeconds += step
         if realtime { waitForTime(elapsedSeconds) }
     }

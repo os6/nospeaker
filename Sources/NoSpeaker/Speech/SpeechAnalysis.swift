@@ -1,26 +1,6 @@
 import Foundation
 import Darwin
 
-func linearPredictionCoefficients(_ x: [Double], order p: Int) -> ([Double], Double) {
-    var r = [Double](repeating: 0, count: p + 1)
-    for k in 0...p { var s = 0.0; for i in k..<x.count { s += x[i] * x[i - k] }; r[k] = s }
-    var a = [Double](repeating: 0, count: p + 1); a[0] = 1
-    guard r[0] > 1e-12 else { return (a, 0) }
-    r[0] *= 1.0001
-    var e = r[0]
-    for i in 1...p {
-        var acc = r[i]
-        for j in 1..<i { acc += a[j] * r[i - j] }
-        let k = -acc / e
-        var na = a
-        for j in 1..<i { na[j] = a[j] + k * a[i - j] }
-        na[i] = k
-        a = na
-        e *= 1 - k * k
-    }
-    return (a, e)
-}
-
 struct ComplexNumber {
     var realPart: Double, imaginaryPart: Double
     static func + (l: ComplexNumber, r: ComplexNumber) -> ComplexNumber { ComplexNumber(realPart: l.realPart + r.realPart, imaginaryPart: l.imaginaryPart + r.imaginaryPart) }
@@ -54,7 +34,9 @@ func polynomialRoots(_ a: [Double]) -> [ComplexNumber] {
     return z
 }
 
-func analyzeSpeechSamples(_ x: [Float]) -> [SpeechFrame] {
+func analyzeSpeechSamples(
+    _ x: [Float], envelopeExponent: Double = 0.45
+) -> [SpeechFrame] {
     let win = Int(0.025 * sampleRate), hopN = Int(hop * sampleRate), order = 18
     // The original English LPC/formant analysis remains unchanged.
     let hamming = (0..<win).map { 0.54 - 0.46 * cos(2 * .pi * Double($0) / Double(win - 1)) }
@@ -108,7 +90,7 @@ func analyzeSpeechSamples(_ x: [Float]) -> [SpeechFrame] {
     let peak = rmsList.max() ?? 1
     for k in frames.indices {
         let rel = rmsList[k] / max(peak, 1e-9)
-        frames[k].level = rel < 0.02 ? 0 : Float(min(1, pow(rel, 0.45)))
+        frames[k].level = rel < 0.02 ? 0 : Float(min(1, pow(rel, envelopeExponent)))
         if frames[k].level == 0 { frames[k].voiced = false }
     }
     func median(_ v: [Double]) -> Double { v.sorted()[v.count / 2] }
@@ -124,8 +106,10 @@ func analyzeSpeechSamples(_ x: [Float]) -> [SpeechFrame] {
 
 /// A voiced frame as two tones, F1 and F2. Two rather than three: in a blind test two were clearer, and louder,
 /// because the motor's strength is split fewer ways.
-func formantTones(_ f: SpeechFrame) -> [(hz: Double, amp: Double)] {
-    let w = [f.amps[0], f.amps[1] * 1.8]
+func formantTones(
+    _ f: SpeechFrame, secondFormantGain: Double = 1.8
+) -> [(hz: Double, amp: Double)] {
+    let w = [f.amps[0], f.amps[1] * secondFormantGain]
     let sum = max(w[0] + w[1], 1e-9)
     return [(f.formants[0], w[0] / sum), (f.formants[1], w[1] / sum)]
 }

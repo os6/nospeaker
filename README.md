@@ -74,20 +74,20 @@ macOS built-in voices; download Tünde in macOS voice settings if it is missing.
 `--voice <name>` still overrides the system voice for either language. The
 interactive text entry accepts Hungarian accented characters, including ő and ű.
 
-**macOS Unicode voice fix:** Foundation's Process converts accented
-command-line arguments to decomposed UTF-8. Passing the displayed name
-"Tünde" directly to the macOS say command therefore silently selected the
-default English voice on this Mac. NoSpeaker now resolves accented voice names
-through Apple's AVSpeechSynthesisVoice identifiers (ASCII) before synthesis.
-The original English default voice is unchanged, and the test suite checks
-that gyár and giár no longer produce identical motor-preview WAVs.
+**macOS Unicode voice fix:** Foundation's Process passes accented voice
+names to say using decomposed Unicode; the displayed name Tünde silently
+selected the default English voice on this Mac. NoSpeaker now resolves it
+through its ASCII Apple voice identifier. Both languages now use the
+**same tested LPC/formant encoder**, retaining Tünde's Hungarian
+pronunciation. Hungarian uses a slightly lower upper-formant gain and a less
+compressed RMS envelope so weak speech frames do not trigger excessive
+electronic pulses. English keeps the original analysis and volume profile.
+All acoustic settings are centralized in SpeechEncodingProfile.swift.
+The shared speech pulse-rate limit is unchanged at 70–250 Hz.
 
-Hungarian audio processing uses a **separate experimental spectral vocoder**
-(20 ms analysis windows, 5 ms analysis hops). It selects up to two dominant
-audio spectrum components in each window, tracks pitch independently and
-preserves rapid amplitude changes. Tünde produces the original Hungarian
-speech; the vocoder turns that audio into motor commands. The original English
-LPC/formant pipeline is left unchanged.
+The experimental Hungarian spectral vocoder and its filters were removed
+after quantitative listening and speech-recognition comparisons showed
+poorer intelligibility. See docs/hungarian-speech-research.md.
 
 The optional Hungarian phoneme inventory identifies gy (/ɟ/), ty (/c/),
 sz (/s/), cs (/t͡ʃ/), dzs (/d͡ʒ/) and long digraph spellings for inspection.
@@ -99,8 +99,11 @@ replace Tünde's pronunciation or time-align phonemes to the waveform:
 # Hungarian phoneme inventory (approximate IPA): /hoɟ vɒɟ/
 ```
 
-Intelligibility is limited by the physical trackpad and the maximum of two
-simultaneous tones. This encoding is experimental until listeners validate it.
+Intelligibility is limited by the physical trackpad and sine-wave speech
+representation: voiced speech is reduced to two formant tones and unvoiced
+speech to short high-tone bursts. This cannot preserve every component of a
+natural human voice; some metallic coloration may remain. Motor playback
+must be evaluated by listening, not assumed clean from synthetic tests.
 
 Speech pulse rate is controlled by one global shared safety policy:
 `SpeechActuationLimits` (70–250 Hz) for English and Hungarian.
@@ -125,6 +128,18 @@ the trackpad motor.
 
 Playback is capped at 20 seconds of synthesized speech per preview, with a
 conservative waveform level. WAV export supports repeatable offline testing.
+
+An optional offline evaluator uses an installed Hungarian Whisper model
+to compare the reconstructed motor-preview speech against Tünde's original:
+
+    python3 scripts/evaluate-hungarian-speech.py --runs 3
+    python3 scripts/evaluate-hungarian-speech.py --sample sibilants --runs 3
+    python3 scripts/evaluate-hungarian-speech.py --sample palatal --runs 3
+
+This requires whisper.cpp, its Hungarian model, and ffmpeg already installed.
+It never activates the trackpad or uploads any audio. ASR word and character
+errors are only proxies for intelligibility, not listening test results.
+
 
 ## 03 / play with it
 

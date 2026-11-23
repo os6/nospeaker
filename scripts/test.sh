@@ -13,10 +13,6 @@ swiftc Sources/NoSpeaker/Core/SpeechActuationLimits.swift \
     Tests/SpeechActuationLimits/main.swift -o "$binary"
 "$binary"
 
-swiftc Sources/NoSpeaker/HungarianCodec/PulsePhaseAlignment.swift \
-    Tests/PulsePhaseAlignment/main.swift -o "$binary"
-"$binary"
-
 swiftc Sources/NoSpeaker/Speech/SpeechVoiceResolution.swift \
     Tests/SpeechVoiceResolution/main.swift -o "$binary"
 "$binary"
@@ -25,11 +21,18 @@ swiftc Sources/NoSpeaker/Speech/HungarianPhonology.swift Tests/Phonology/main.sw
 "$binary"
 
 swiftc Sources/NoSpeaker/Core/SpeechActuationLimits.swift \
-    Sources/NoSpeaker/HungarianCodec/SpectralPeaks.swift \
-    Sources/NoSpeaker/HungarianCodec/SpeechFeatures.swift \
-    Sources/NoSpeaker/HungarianCodec/HungarianVocoder.swift \
-    Sources/NoSpeaker/HungarianCodec/ToneStabilizer.swift \
-    Tests/HungarianCodec/main.swift -o "$binary"
+    Sources/NoSpeaker/Speech/LinearPrediction.swift \
+    Sources/NoSpeaker/Speech/SpeechAnalysis.swift \
+    Tests/SpeechAnalysis/main.swift -o "$binary"
+"$binary"
+
+swiftc Sources/NoSpeaker/Speech/SpeechLanguage.swift \
+    Sources/NoSpeaker/Speech/SpeechEncodingProfile.swift \
+    Sources/NoSpeaker/Core/SpeechActuationLimits.swift \
+    Sources/NoSpeaker/Speech/LinearPrediction.swift \
+    Sources/NoSpeaker/Speech/SpeechAnalysis.swift \
+    Sources/NoSpeaker/Audio/SpeechActuations.swift \
+    Tests/SpeechActuations/main.swift -o "$binary"
 "$binary"
 
 
@@ -55,17 +58,23 @@ trap 'rm -f "$binary"; rm -rf "$preview_directory"' EXIT
 test -s "$preview_directory/hungarian.wav"
 test -s "$preview_directory/english.wav"
 
-# Regression: Swift Process decomposes Unicode voice names. Before the fix,
-# say -v Tünde silently used the English default and the encoded outputs
-# for gyár and giár were byte-identical.
+# The Tünde source must distinguish Hungarian gy /ɟ/ from written gi.
+# Preview consonants contain random noise-like carriers, so comparing
+# their WAV bytes would not be a valid phoneme regression by itself.
+# The voice resolver unit test above checks the application selects
+# this exact ASCII identifier, which avoids the Unicode fallback.
 if /usr/bin/say -v '?' | grep -q '^Tünde '; then
-    ./nospeaker --lang hu --preview-wav "$preview_directory/gyar.wav" "gyár" >/dev/null
-    ./nospeaker --lang hu --preview-wav "$preview_directory/giar.wav" "giár" >/dev/null
+    /usr/bin/say -v com.apple.voice.compact.hu-HU.Mariska \
+        -o "$preview_directory/gyar.wav" --file-format=WAVE \
+        --data-format=LEF32@16000 "gyár"
+    /usr/bin/say -v com.apple.voice.compact.hu-HU.Mariska \
+        -o "$preview_directory/giar.wav" --file-format=WAVE \
+        --data-format=LEF32@16000 "giár"
     if cmp -s "$preview_directory/gyar.wav" "$preview_directory/giar.wav"; then
-        echo 'FAIL: Hungarian palatal stop collapsed into English g+i' >&2
+        echo 'FAIL: Tünde source collapsed Hungarian gy into g+i' >&2
         exit 1
     fi
-    echo 'PASS: Unicode Tünde voice selected, gy distinct from g+i'
+    echo 'PASS: ASCII Tünde voice source preserves Hungarian gy versus g+i'
 fi
 
 afinfo "$preview_directory/hungarian.wav" | grep -q '16000 Hz'

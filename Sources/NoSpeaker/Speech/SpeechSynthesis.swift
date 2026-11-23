@@ -78,9 +78,13 @@ func synthesizeSpeechFrames(_ text: String) -> [SpeechFrame] {
     }
 
     let samples = Array(UnsafeBufferPointer(start: channelSamples, count: Int(audioBuffer.frameLength)))
-    var speechFrames = speechLanguage == .hungarian
-        ? HungarianVocoder.encode(samples)
-        : analyzeSpeechSamples(samples)
+    // One shared LPC encoder avoids phonetically destructive differences.
+    // Hungarian phonemes and coarticulation come from the native Tünde voice.
+    // A less compressed Hungarian envelope avoids exaggerating quiet,
+    // hiss-like LPC frames. English retains its original analysis profile.
+    var speechFrames = analyzeSpeechSamples(
+        samples, envelopeExponent: speechLanguage.encodingProfile.envelopeExponent
+    )
     while speechFrames.first?.level == 0 { speechFrames.removeFirst() }
     while speechFrames.last?.level == 0 { speechFrames.removeLast() }
     return speechFrames
