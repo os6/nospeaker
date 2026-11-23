@@ -2,7 +2,7 @@ import Foundation
 import Darwin
 
 var renderRunning = false
-/// The scroller'state position: one character per step, stepped by the frame clock so every step is even.
+/// The scroller position: one character per step, stepped by the frame clock so every step is even.
 var marquee = 0
 var lastMutePoll = -9.0
 func startRenderer() {

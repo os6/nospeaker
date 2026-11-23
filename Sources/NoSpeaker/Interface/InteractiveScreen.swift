@@ -32,14 +32,14 @@ func drawSay(_ canvas: Canvas, _ state: LiveState, _ elapsedTime: Double) {
     if let r = finish.range(of: " ESC ") {
         canvas.text(6 + finish.distance(from: finish.startIndex, to: r.lowerBound), 19, " ESC ", paperC, bg: inkC, bold: true)
     }
-    canvas.text(6 + finish.count + 2, 19, "· return says it", dimC)
+    canvas.text(6 + finish.count + 2, 19, "return to speak", dimC)
 }
 
 func drawOutro(_ canvas: Canvas, _ state: LiveState, _ elapsedTime: Double) {
     let rows: [(String, String)] = [
-        ("code · sound · design", "a90"), ("web", "a90.com"),
+        ("code, sound, design", "a90"), ("web", "a90.com"),
         ("speakers used", "0"), ("vibrations", NumberFormatter.localizedString(from: NSNumber(value: state.actuations), number: .decimal)),
-        ("runtime", String(format: "%.1f state", elapsedTime - state.started)),
+        ("runtime", String(format: "%.1f s", elapsedTime - state.started)),
     ]
     canvas.centered(10, "C R E D I T S", inkC, bold: true)
     for (i, r) in rows.enumerated() {
@@ -48,7 +48,7 @@ func drawOutro(_ canvas: Canvas, _ state: LiveState, _ elapsedTime: Double) {
         canvas.text(14 + d.count, 12 + i, r.1, inkC, bold: true)
     }
     if state.waitingForKey {
-        let line = "follow @codycollier for more  ·  press  F  to open"
+        let line = "follow @codycollier for more; press  F  to open"
         let x = (80 - line.count) / 2
         canvas.text(x, 18, line, inkC, bold: true)
         if let f = line.range(of: " F ") {

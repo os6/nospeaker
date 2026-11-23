@@ -3,6 +3,9 @@
 Keep pull requests focused on one behavior. State what changed, why it changed,
 and how you verified it. Avoid unrelated cosmetic changes in feature PRs.
 
+Keep UI copy and documentation factual and concise. Avoid decorative
+separators, promotional filler and unnecessary em dashes in prose.
+
 ## Source layout
 
 - Sources/NoSpeaker/main.swift: command-line arguments and executable entry point

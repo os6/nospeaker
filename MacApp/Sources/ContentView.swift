@@ -130,9 +130,12 @@ struct ContentView: View {
                 )
 
                 Spacer()
-                Text("⌘↩ Play · esc Stop")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+                HStack(spacing: 12) {
+                    Text("⌘↩ Play")
+                    Text("Esc Stop")
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
             }
         }
         .padding(.top, 2)

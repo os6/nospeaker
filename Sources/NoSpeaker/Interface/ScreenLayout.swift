@@ -44,11 +44,11 @@ func drawScreen(_ canvas: Canvas, _ state: LiveState, _ elapsedTime: Double) {
     canvas.text(38, 21, asciiBar(active ? state.level : 0, width: 10), bodyC)
     canvas.text(50, 21, speechLanguage.rawValue.uppercased(), inkC, bold: true)
     if let muted = state.muted {
-        let chip = muted ? " SPEAKERS MUTED " : " SPEAKERS ON · MUTE "
+        let chip = muted ? " SPEAKERS MUTED " : " SPEAKERS ON: MUTE "
         let blink = !muted && Int(elapsedTime * 2.5) % 2 == 0
         canvas.text(79 - chip.count, 21, chip, blink ? inkC : paperC, bg: blink ? faintC : inkC, bold: true)
     }
-    canvas.text(2, 22, "space skip · q end", faintC)
+    canvas.text(2, 22, "space: skip    q: end", faintC)
     // Scroller.
     let chars = Array(scrollText)
     for x in 0..<80 {

@@ -52,7 +52,7 @@ func playDemo(visuals: Bool) {
     if !stopRequested && !jumpToCredits { enter(.sing, 5, "MELODY"); say("♪ melody"); pause(0.4); playMelody(); pause(0.5) }
     // 6. Beat, then the rap over it.
     if !stopRequested && !jumpToCredits {
-        enter(.beat, 6, "BEAT"); say("beat · then rap: “\(rhythmLine)”")
+        enter(.beat, 6, "BEAT"); say("beat, then rap: “\(rhythmLine)”")
         playRhythm(bars: 4, rapBar: 2, rap: voices[rhythmLine]!, rapText: rhythmLine); pause(0.5)
     }
     // 7. Your turn.
@@ -95,7 +95,7 @@ func signOff(seconds: Int, actuations: Int) {
     let lockup = logoLockup()
     for (i, line) in lockup.enumerated() { print("  " + (i < asciiLogo.count ? "\(esc)1m" : "\(esc)2m") + line + "\(esc)0m") }
     print("")
-    print("  \(esc)1m\(seconds / 60):" + String(format: "%02d", seconds % 60) + "\(esc)0m  ·  \(esc)1m\(vibrations)\(esc)0m vibrations  ·  \(esc)1m0\(esc)0m speakers used")
+    print("  \(esc)1m\(seconds / 60):" + String(format: "%02d", seconds % 60) + "\(esc)0m    \(esc)1m\(vibrations)\(esc)0m vibrations    \(esc)1m0\(esc)0m speakers used")
     print("  more        \(esc)1mx.com/codycollier\(esc)0m")
     print("  play again  \(esc)2m\(me)\(esc)0m")
     print("  say a line  \(esc)2m\(me) \"hello there\"\(esc)0m")

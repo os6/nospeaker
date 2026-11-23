@@ -129,6 +129,22 @@
         }
       }
     },
+    "Esc Stop": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esc Stop"
+          }
+        },
+        "hu": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esc leállítás"
+          }
+        }
+      }
+    },
     "Light": {
       "localizations": {
         "en": {
@@ -577,18 +593,18 @@
         }
       }
     },
-    "⌘↩ Play · esc Stop": {
+    "⌘↩ Play": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "⌘↩ Play · esc Stop"
+            "value": "⌘↩ Play"
           }
         },
         "hu": {
           "stringUnit": {
             "state": "translated",
-            "value": "⌘↩ indítás · esc leállítás"
+            "value": "⌘↩ indítás"
           }
         }
       }

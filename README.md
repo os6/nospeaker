@@ -58,48 +58,30 @@ cd nospeaker
 ./nospeaker
 ```
 
-## Native macOS app
+## macOS app
 
-NoSpeaker includes a SwiftUI macOS app with a text editor, Hungarian/English
-speech selection, trackpad/speaker output selection, play/stop controls and
-highlighted words during playback. The existing NoSpeaker audio engine is reused
-without changes to its speech coding. Word highlighting uses the macOS voice
-synthesizer's word events aligned with the motor's playback timeline.
+The native macOS app provides text entry, English and Hungarian speech, a
+trackpad or speaker output option, playback controls and word highlighting.
+It uses the same speech engine as the CLI.
 
-Build and open it from the repository (Xcode required; XcodeGen optional when
-the checked-in Xcode project is present):
+Build it with Xcode:
 
 ~~~sh
 ./scripts/build-app.sh
 open build/MacApp/Build/Products/Release/NoSpeaker.app
 ~~~
 
-The local build uses an ad-hoc signature, not Developer ID notarization.
-macOS 13 or newer is supported. The trackpad/speaker selector is the
-native AppKit NSSegmentedControl, the same control family used by Calendar.
-AppKit owns its interaction, geometry, and OS-specific animations; there is
-no custom Glass capsule, nested Glass material or simulated enlargement.
-The speech-language selector is a native SwiftUI Menu using the same Glass
-button style as the toolbar on supported macOS versions. Older versions
-retain the system's native bordered menu style.
+The app supports macOS 13 and later. The language and appearance settings
+default to the system configuration and are saved between launches.
+Add interface translations to MacApp/Resources/Localizable.xcstrings
+and register new languages in InterfaceLanguage.
 
-The Play/Stop buttons have bounded, reversible drag feedback that does not
-trigger playback. Reduce Motion is respected. Closing the last window quits
-the app and ends any running child audio process.
+The output switch is a native NSSegmentedControl. The language menu uses
+the standard SwiftUI menu style. Glass rendering and animations are handled
+by macOS where available. Closing the last window exits the app and stops
+playback.
 
-The upper-right menus select **display language** (System, Magyar, English)
-and **appearance** (System, Light, Dark). Both preferences persist and default
-to System. Display language is separate from speech language. To add another
-display language, add an InterfaceLanguage case and the matching translations
-in MacApp/Resources/Localizable.xcstrings.
-
-The System appearance resolves the macOS effective appearance explicitly
-and observes system appearance changes. This avoids the stale theme that
-can result from applying preferredColorScheme(nil) after a Light override.
-Native controls use the existing orange accent and respect macOS accessibility
-preferences, including Reduce Motion.
-
-For regression testing without the haptic motor:
+Run tests without activating the trackpad:
 
 ~~~sh
 ./scripts/test.sh
@@ -257,7 +239,8 @@ is over a quiet room, and how much of the sound is the note itself.
       131         262         523         1047        2093    3951
    public notes stop at 600 Hz ─┘
 
-across: every semitone, in Hz · up: loudness, +16 to +34 dB
+horizontal: frequency (Hz)
+vertical: loudness (+16 to +34 dB)
 # clean note   + fair   . mostly buzz
 ```
 
@@ -290,4 +273,5 @@ measured on a MacBook.
 ──────────────────────  thanks for listening  ───────────────────────
 ```
 
-Made by [Cody Collier](https://x.com/codycollier) · [a90.com](https://a90.com) · [MIT license](LICENSE)
+Created by [Cody Collier](https://x.com/codycollier) at [a90.com](https://a90.com).
+Licensed under the [MIT license](LICENSE).

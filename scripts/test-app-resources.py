@@ -15,6 +15,8 @@ for key, content in catalog["strings"].items():
         assert translation is not None, (locale, key)
         assert translation["stringUnit"]["value"], (locale, key)
         assert translation["stringUnit"]["state"] == "translated", (locale, key)
+        text = translation["stringUnit"]["value"]
+        assert "—" not in text and "·" not in text, (locale, key)
 
 sources = sorted((root / "MacApp/Sources").glob("*.swift"))
 assert sources, "No native UI code found"

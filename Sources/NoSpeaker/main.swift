@@ -24,7 +24,7 @@ func takeFlag(_ flagName: String) -> Bool {
 
 if takeFlag("--help") || takeFlag("-h") {
     print("""
-    NO SPEAKER · a90.com presents
+    NO SPEAKER by a90.com
     Your MacBook's trackpad has no speaker. This makes it talk anyway, through its haptic motor.
 
       nospeaker                         the show (space skips a part, q goes to the end)
@@ -43,7 +43,7 @@ if takeFlag("--help") || takeFlag("-h") {
       --plain                           no visuals
 
     Mute your Mac: it still talks. Put it on a table, and keep your hands off the trackpad until it asks.
-    a90.com · x.com/codycollier
+    a90.com    x.com/codycollier
     """)
     exit(0)
 }

@@ -14,8 +14,8 @@ func drawSing(_ canvas: Canvas, _ state: LiveState, _ elapsedTime: Double) {
     canvas.text(70, 11, "»", inkC, bold: true)
     canvas.text(72, 11, state.noteRow >= 0 ? state.noteName : "", inkC, bold: true)
     if state.noteRow >= 0 { canvas.text(70, 12, String(format: "%4.0fhz", state.hz), midC) }
-    canvas.centered(17, "an original hook in the motor'state loudest, cleanest octave", bodyC)
-    canvas.centered(18, "scoops · glides · vibrato", dimC)
+    canvas.centered(17, "an original hook in the motor's clearest octave", bodyC)
+    canvas.centered(18, "scoops, glides, vibrato", dimC)
 }
 
 func drawBeat(_ canvas: Canvas, _ state: LiveState, _ elapsedTime: Double) {
@@ -49,7 +49,7 @@ func drawBeat(_ canvas: Canvas, _ state: LiveState, _ elapsedTime: Double) {
     if rapping {
         drawCaption(canvas, state, elapsedTime, y: 18)
     } else {
-        canvas.centered(19, String(format: "%.0f bpm  ·  bar %d/%d  ·  kick, snare, hats and bass from one motor", state.bpm, state.bar + 1, state.bars), midC)
+        canvas.centered(19, String(format: "%.0f bpm    bar %d/%d    kick, snare, hats and bass", state.bpm, state.bar + 1, state.bars), midC)
     }
 }
 
