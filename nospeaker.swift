@@ -7,6 +7,10 @@
 //   nospeaker                      the show: about a minute and a half, in the terminal
 //   nospeaker "any words"          say something
 //   nospeaker --sweep              a rising tone from 100 Hz to 4 kHz
+//   nospeaker --song "artist title" find a song (iTunes Search, 30 s preview) and play it on the motor
+//   nospeaker --file song.mp3      play any audio file on the motor
+//   nospeaker --sound sparkle      one short sound (sparkle, heartbeat, sing, sweep); --volume 0…100
+//   nospeaker --web                a control panel in the browser (127.0.0.1:4747) for all of the above
 //   options                        --voice <name> (any voice from `say -v '?'`), --dark, --plain
 //
 // How it talks: macOS's own voice (`say`) speaks the line into memory. Every 10 ms, linear prediction finds
@@ -17,6 +21,7 @@
 // Private API: MultitouchSupport is undocumented and may change with any macOS update. The motor is never
 // driven past its normal maximum.
 
+import Accelerate
 import AVFoundation
 import CoreAudio
 import Darwin
@@ -159,6 +164,8 @@ func openMotor() -> CFTypeRef {
 
 var motor: CFTypeRef?
 var motorPointer: UnsafeMutableRawPointer?
+/// Overall volume (0…1), set from the web panel. Scales every actuation; never raises past the normal maximum.
+var masterVolume: Float = 1
 
 /// Plays tones (Hz, relative strength) together for `ms` at overall `level` (0…1). Strengths are scaled to
 /// add up to 1: past that is louder, but the driver starts stalling on long runs.
@@ -170,7 +177,7 @@ func play(_ tones: [(hz: Double, amp: Double)], ms: Double, level: Float) {
         "Tones": tones.map { ["Type": "Sine", "Amplitude": $0.amp / sum, "DurationMS": ms, "DelayMS": 0.0, "FrequencykHz": $0.hz / 1000] },
     ]
     guard let act = actuationCreate!(shape as CFDictionary, 0) else { return }
-    _ = actuationPlay!(act, motorPointer, 0, min(1, max(0, level)), 0)
+    _ = actuationPlay!(act, motorPointer, 0, min(1, max(0, level)) * masterVolume, 0)
     Unmanaged<AnyObject>.fromOpaque(act).release()
     let first = tones[0].hz
     live {
@@ -219,26 +226,40 @@ func speakersMuted() -> Bool? {
 
 // MARK: - Touch (for "play it")
 
-struct Contact { var down = false; var x: Float = 0; var y: Float = 0; var size: Float = 0 }
+/// One finger: position 0…1 (x left to right, y bottom to top) and contact size (grows as you press harder).
+struct Contact { var down = false; var x: Float = 0; var y: Float = 0; var size: Float = 0; var id: Int32 = 0 }
 var touchLock = os_unfair_lock()
-var currentContact = Contact()
-var contact: Contact {
+var currentContacts: [Contact] = []
+/// Every finger on the glass right now.
+var contacts: [Contact] {
     os_unfair_lock_lock(&touchLock); defer { os_unfair_lock_unlock(&touchLock) }
-    return currentContact
+    return currentContacts
 }
+/// The finger that plays: the last one down.
+var contact: Contact { contacts.last ?? Contact() }
+var touchActive = false
 let touchCallback: FrameCallback = { _, data, count, _, _ in
-    var best = Contact()
+    var all: [Contact] = []
     if let data, count > 0 {
         for i in 0..<Int(count) {
             let rec = data.advanced(by: i * 96)
             let state = rec.load(fromByteOffset: 20, as: Int32.self)
             guard (3...5).contains(state) else { continue }
-            best = Contact(down: true, x: rec.load(fromByteOffset: 32, as: Float.self),
-                           y: rec.load(fromByteOffset: 36, as: Float.self), size: rec.load(fromByteOffset: 48, as: Float.self))
+            all.append(Contact(down: true, x: rec.load(fromByteOffset: 32, as: Float.self),
+                               y: rec.load(fromByteOffset: 36, as: Float.self), size: rec.load(fromByteOffset: 48, as: Float.self),
+                               id: rec.load(fromByteOffset: 16, as: Int32.self)))
         }
     }
-    os_unfair_lock_lock(&touchLock); currentContact = best; os_unfair_lock_unlock(&touchLock)
+    os_unfair_lock_lock(&touchLock); currentContacts = all; os_unfair_lock_unlock(&touchLock)
     return 0
+}
+typealias GetDimensions = @convention(c) (UnsafeMutableRawPointer, UnsafeMutablePointer<Int32>, UnsafeMutablePointer<Int32>) -> Int32
+/// The trackpad's surface in mm (width, height), or nil if macOS doesn't say.
+func padSize() -> (w: Double, h: Double)? {
+    guard let getDims = sym("MTDeviceGetSensorSurfaceDimensions", GetDimensions.self), let dev = touchDevices().first else { return nil }
+    var w: Int32 = 0, h: Int32 = 0
+    guard getDims(dev, &w, &h) == 0, w > 0, h > 0 else { return nil }
+    return (Double(w) / 100, Double(h) / 100)
 }
 /// Only the trackpad whose motor we opened.
 func touchDevices() -> [UnsafeMutableRawPointer] {
@@ -258,9 +279,12 @@ func startTouch() -> Bool {
     if quiet { silenceOthers() }
     for d in devs { registerCallback(d, touchCallback); deviceStart(d, 0) }
     if quiet { usleep(200_000); unsilence() }
+    touchActive = !devs.isEmpty
     return !devs.isEmpty
 }
 func stopTouch() {
+    touchActive = false
+    os_unfair_lock_lock(&touchLock); currentContacts = []; os_unfair_lock_unlock(&touchLock)
     for d in touchDevices() {
         unregisterCallback?(d, touchCallback)
         deviceStop?(d)
@@ -469,6 +493,7 @@ struct LiveState {
     var actuations = 0
     var started = 0.0
     var stepDone = 0, stepTotal = 0
+    var musicPos = 0.0, musicTotal = 0.0
 }
 let liveLock = NSLock()
 var liveState = LiveState()
@@ -586,6 +611,60 @@ func sing() {
     }
 }
 
+// MARK: - Known tunes, for the Sounds menu
+// Each is (note, beats), "-" a rest, moved up into the motor's loudest, cleanest octaves (about 750 Hz to 2 kHz).
+
+/// Plays a melody: a pure tone per note, in whole cycles, with a short gap before the next note so repeated
+/// notes (E E E) stay separate, and a little vibrato on long ones.
+func playMelody(_ notes: [(String, Double)], bpm: Double) {
+    let beat = 60 / bpm
+    let start = mach_absolute_time()
+    var at = 0.0
+    for (name, beats) in notes {
+        if interrupted() { break }
+        let length = beats * beat
+        if name != "-" {
+            let target = hz(name)
+            let sounding = length - min(0.05, length * 0.2)
+            live { $0.noteName = name }
+            var t = at
+            while t < at + sounding && !interrupted() {
+                let age = t - at
+                var f = target
+                if age > 0.2 { f *= pow(2, min(1, (age - 0.2) / 0.25) * 0.18 * sin(2 * .pi * 5.8 * age) / 12) }
+                let level = age < 0.012 ? 0.6 + 0.4 * age / 0.012 : 1.0
+                let seg = max(1, (0.03 * f).rounded()) / f
+                play([(f, 1)], ms: min(seg, at + sounding - t + 0.004) * 1000, level: Float(level))
+                t += seg
+                waitUntil(start + UInt64(t * ticksPerSecond))
+            }
+        }
+        at += length
+        waitUntil(start + UInt64(at * ticksPerSecond))
+    }
+    live { $0.noteName = "" }
+}
+
+/// Jingle Bells (James Lord Pierpont, 1857; public domain): the chorus, in C.
+let jingleBells: [(String, Double)] = [
+    ("E6", 1), ("E6", 1), ("E6", 2), ("E6", 1), ("E6", 1), ("E6", 2),
+    ("E6", 1), ("G6", 1), ("C6", 1.5), ("D6", 0.5), ("E6", 4),
+    ("F6", 1), ("F6", 1), ("F6", 1.5), ("F6", 0.5), ("F6", 1), ("E6", 1), ("E6", 1), ("E6", 0.5), ("E6", 0.5),
+    ("E6", 1), ("D6", 1), ("D6", 1), ("E6", 1), ("D6", 2), ("G6", 2),
+    ("E6", 1), ("E6", 1), ("E6", 2), ("E6", 1), ("E6", 1), ("E6", 2),
+    ("E6", 1), ("G6", 1), ("C6", 1.5), ("D6", 0.5), ("E6", 4),
+    ("F6", 1), ("F6", 1), ("F6", 1.5), ("F6", 0.5), ("F6", 1), ("E6", 1), ("E6", 1), ("E6", 0.5), ("E6", 0.5),
+    ("G6", 1), ("G6", 1), ("F6", 1), ("D6", 1), ("C6", 4),
+]
+
+/// Happy Birthday to You (public domain): the whole verse, in C, in 3/4.
+let happyBirthday: [(String, Double)] = [
+    ("G5", 0.75), ("G5", 0.25), ("A5", 1), ("G5", 1), ("C6", 1), ("B5", 2),
+    ("G5", 0.75), ("G5", 0.25), ("A5", 1), ("G5", 1), ("D6", 1), ("C6", 2),
+    ("G5", 0.75), ("G5", 0.25), ("G6", 1), ("E6", 1), ("C6", 1), ("B5", 1), ("A5", 2),
+    ("F6", 0.75), ("F6", 0.25), ("E6", 1), ("C6", 1), ("D6", 1), ("C6", 3),
+]
+
 /// Drums, bass and (from `rapBar`) a rapped line, mixed into each actuation. Everything restarts on one
 /// carrier period: the bass note, or the voice's own pitch while it raps, so the ear hears that as the low
 /// note. While the voice talks, the bass drops out and the drums duck.
@@ -682,15 +761,19 @@ func groove(bars: Int, rapBar: Int, rap: [Frame], rapText: String) {
 
 /// Touch to play: the trackpad as an instrument. Slide for pitch (snapped to the motor's cleanest notes, with a
 /// glide), move up for more vibrato, press with more of your finger for louder.
-func touchToPlay() {
+/// `endless` (the web panel): no waiting limit and no 12 s limit, it plays until stopped.
+func touchToPlay(endless: Bool = false) {
     guard startTouch() else { live { $0.touchMissed = true }; pause(1.5); return }
     defer { stopTouch() }
-    live { $0.touchWaitUntil = now() + 8 }
-    let waitEnd = now() + 8
-    while now() < waitEnd && !interrupted() && !contact.down { usleep(5000) }
-    guard contact.down else { live { $0.touchMissed = true }; pause(1.5); return }
-    let endAt = now() + 12
-    live { $0.touchSeen = true; $0.touchEnds = endAt }
+    var endAt = Double.infinity
+    if !endless {
+        live { $0.touchWaitUntil = now() + 8 }
+        let waitEnd = now() + 8
+        while now() < waitEnd && !interrupted() && !contact.down { usleep(5000) }
+        guard contact.down else { live { $0.touchMissed = true }; pause(1.5); return }
+        endAt = now() + 12
+        live { $0.touchSeen = true; $0.touchEnds = endAt }
+    }
     let scale = ["G5", "A5", "B5", "C6", "E6", "F6", "G6", "A6", "B6", "C7"].map(hz)
     var current = scale[4]
     var lastDown = false, downAt = 0.0
@@ -770,6 +853,251 @@ func sayAnything() {
         pause(0.6)
     }
     live { $0.inputActive = false }
+}
+
+// MARK: - Music (a song from a file, or a 30-second preview found with Apple's iTunes Search)
+//
+// The song is decoded to 16 kHz mono. Every 10 ms an FFT finds its two strongest peaks inside the motor's
+// range (weighted toward 200 Hz to 2.5 kHz, where melody and vocals sit) and the motor plays them as tones.
+// Sudden jumps in low-end energy (kicks) become a short pitch-dive thump.
+
+/// A failure the web panel reports, and the command line prints before exiting.
+struct Problem: Error { let headline: String; let message: String }
+
+struct MusicFrame {
+    var tones: [(hz: Double, amp: Double)] = []
+    var level: Float = 0
+    var onset = false
+}
+
+/// Any audio file macOS can open (mp3, m4a, wav, aiff, flac…) as 16 kHz mono samples.
+func loadAudio(_ url: URL) -> [Float]? {
+    guard let file = try? AVAudioFile(forReading: url), file.length > 0 else { return nil }
+    let inFmt = file.processingFormat
+    guard let inBuf = AVAudioPCMBuffer(pcmFormat: inFmt, frameCapacity: AVAudioFrameCount(file.length)),
+          (try? file.read(into: inBuf)) != nil,
+          let outFmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false),
+          let conv = AVAudioConverter(from: inFmt, to: outFmt) else { return nil }
+    conv.downmix = true
+    let cap = AVAudioFrameCount(Double(inBuf.frameLength) * sampleRate / inFmt.sampleRate) + 4096
+    guard let outBuf = AVAudioPCMBuffer(pcmFormat: outFmt, frameCapacity: cap) else { return nil }
+    var given = false
+    var error: NSError?
+    _ = conv.convert(to: outBuf, error: &error) { _, status in
+        if given { status.pointee = .endOfStream; return nil }
+        given = true; status.pointee = .haveData; return inBuf
+    }
+    guard error == nil, let ch = outBuf.floatChannelData?[0], outBuf.frameLength > 0 else { return nil }
+    return Array(UnsafeBufferPointer(start: ch, count: Int(outBuf.frameLength)))
+}
+
+func analyseMusic(_ x: [Float]) -> [MusicFrame] {
+    let n = 1024, half = n / 2, log2n = vDSP_Length(10), hopN = Int(hop * sampleRate)
+    guard x.count > n, let setup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2)) else { return [] }
+    defer { vDSP_destroy_fftsetup(setup) }
+    var window = [Float](repeating: 0, count: n)
+    vDSP_hann_window(&window, vDSP_Length(n), Int32(vDSP_HANN_NORM))
+    let binHz = sampleRate / Double(n)
+    let lo = Int(100 / binHz), hi = min(half - 2, Int(4000 / binHz))
+    func weight(_ f: Double) -> Double { f < 200 ? 0.45 : f < 2500 ? 1 : 0.6 }
+
+    var frames: [MusicFrame] = [], rms: [Double] = [], flux: [Double] = []
+    var seg = [Float](repeating: 0, count: n), re = [Float](repeating: 0, count: half), im = re
+    var mag = [Float](repeating: 0, count: half), prevLow = [Float](repeating: 0, count: 16)
+    var i = 0
+    while i + n <= x.count {
+        x.withUnsafeBufferPointer { p in vDSP_vmul(p.baseAddress! + i, 1, window, 1, &seg, 1, vDSP_Length(n)) }
+        var energy: Float = 0
+        vDSP_svesq(seg, 1, &energy, vDSP_Length(n))
+        rms.append(sqrt(Double(energy) / Double(n)))
+        re.withUnsafeMutableBufferPointer { rp in
+            im.withUnsafeMutableBufferPointer { ip in
+                var sc = DSPSplitComplex(realp: rp.baseAddress!, imagp: ip.baseAddress!)
+                seg.withUnsafeBufferPointer { sp in
+                    sp.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: half) { vDSP_ctoz($0, 2, &sc, 1, vDSP_Length(half)) }
+                }
+                vDSP_fft_zrip(setup, &sc, 1, log2n, FFTDirection(FFT_FORWARD))
+                vDSP_zvabs(&sc, 1, &mag, 1, vDSP_Length(half))
+            }
+        }
+        // Kick detector: rise in energy below ~250 Hz.
+        var f = 0.0
+        for b in 1..<16 { f += Double(max(0, mag[b] - prevLow[b])); prevLow[b] = mag[b] }
+        flux.append(f)
+        // Two strongest weighted peaks, at least ~2 semitones apart.
+        var peaks: [(hz: Double, w: Double)] = []
+        for b in lo...hi where mag[b] > mag[b - 1] && mag[b] >= mag[b + 1] {
+            let a = Double(mag[b - 1]), c = Double(mag[b]), d = Double(mag[b + 1])
+            let den = a - 2 * c + d
+            let off = den < 0 ? max(-0.5, min(0.5, 0.5 * (a - d) / den)) : 0   // parabolic interpolation
+            let hz = (Double(b) + off) * binHz
+            peaks.append((hz, c * weight(hz)))
+        }
+        peaks.sort { $0.w > $1.w }
+        var picked: [(hz: Double, amp: Double)] = []
+        for p in peaks where picked.count < 2 {
+            if let first = picked.first {
+                if p.w < first.amp * 0.3 { break }
+                if abs(log2(p.hz / first.hz)) < 0.17 { continue }
+            }
+            picked.append((p.hz, p.w))
+        }
+        let sum = max(picked.reduce(0) { $0 + $1.amp }, 1e-9)
+        frames.append(MusicFrame(tones: picked.map { ($0.hz, $0.amp / sum) }))
+        i += hopN
+    }
+    // Loudness, relative to the loud parts of the song (not one spike).
+    let sorted = rms.sorted()
+    let ref = max(sorted[min(sorted.count - 1, Int(Double(sorted.count) * 0.95))], 1e-9)
+    let meanFlux = flux.reduce(0, +) / Double(max(1, flux.count))
+    let sdFlux = sqrt(flux.reduce(0) { $0 + ($1 - meanFlux) * ($1 - meanFlux) } / Double(max(1, flux.count)))
+    var lastOnset = -100
+    for k in frames.indices {
+        let rel = rms[k] / ref
+        frames[k].level = rel < 0.04 ? 0 : Float(min(1, pow(rel, 0.5)))
+        let isPeak = flux[k] > meanFlux + 2 * sdFlux && (k == 0 || flux[k] >= flux[k - 1]) && (k + 1 >= flux.count || flux[k] >= flux[k + 1])
+        if isPeak && k - lastOnset > 12 && frames[k].level > 0 { frames[k].onset = true; lastOnset = k }
+    }
+    return frames
+}
+
+/// Downloads a URL and waits for it (up to 20 s). Nil on any error.
+func fetch(_ url: URL) -> Data? {
+    let done = DispatchSemaphore(value: 0)
+    var result: Data?
+    URLSession.shared.dataTask(with: url) { data, response, _ in
+        if (response as? HTTPURLResponse)?.statusCode == 200 { result = data }
+        done.signal()
+    }.resume()
+    _ = done.wait(timeout: .now() + 20)
+    return result
+}
+
+/// Searches Apple's public iTunes Search API. Only songs that have a 30-second preview.
+func searchSongs(_ query: String, country: String, limit: Int = 10) throws -> [[String: Any]] {
+    var c = URLComponents(string: "https://itunes.apple.com/search")!
+    c.queryItems = [.init(name: "term", value: query), .init(name: "media", value: "music"), .init(name: "entity", value: "song"),
+                    .init(name: "limit", value: String(limit)), .init(name: "country", value: country)]
+    guard let data = fetch(c.url!) else {
+        throw Problem(headline: "nospeaker couldn't search for that song.", message: "It couldn't reach the iTunes Search API. Check your internet connection.")
+    }
+    let results = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["results"] as? [[String: Any]] ?? []
+    return results.filter { $0["previewUrl"] is String }
+}
+
+func songTitle(_ hit: [String: Any]) -> String { "\(hit["artistName"] as? String ?? "?") — \(hit["trackName"] as? String ?? "?")" }
+
+/// Downloads a preview to a temporary file.
+func downloadPreview(_ url: URL, title: String) throws -> URL {
+    guard let audio = fetch(url) else { throw Problem(headline: "nospeaker couldn't get that song.", message: "The preview of \(title) didn't download.") }
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent("nospeaker-\(getpid())-\(UUID().uuidString.prefix(8)).m4a")
+    do { try audio.write(to: file) } catch { throw Problem(headline: "nospeaker couldn't get that song.", message: "It couldn't save the preview to \(file.path).") }
+    return file
+}
+
+/// Decodes and analyses an audio file for the motor.
+func prepareSong(_ url: URL) throws -> [MusicFrame] {
+    guard let samples = loadAudio(url) else {
+        throw Problem(headline: "nospeaker can't play that file.", message: "macOS couldn't open \(url.lastPathComponent) as audio. Songs bought or streamed with DRM can't be read.")
+    }
+    return analyseMusic(samples)
+}
+
+func clock(_ s: Double) -> String { String(format: "%d:%02d", Int(s) / 60, Int(s) % 60) }
+
+/// Below ~400 Hz the motor is quiet and low notes blur into one hum. So music is moved up for it: the whole song
+/// by `musicOctaves`, then any tone still under `musicFloor` up by whole octaves: the same note, just higher,
+/// so the melody stays recognisable. Read on every actuation, so the web panel can change it while it plays.
+var musicOctaves = 0.0      // 0, 1 or 2
+var musicFloor = 400.0      // Hz; 0 leaves low notes where they are
+
+func lifted(_ tones: [(hz: Double, amp: Double)]) -> [(hz: Double, amp: Double)] {
+    var out: [(hz: Double, amp: Double)] = []
+    for tone in tones {
+        var f = tone.hz * pow(2, musicOctaves)
+        while musicFloor > 0 && f < musicFloor && f * 2 <= 4000 { f *= 2 }
+        while f > 4000 { f /= 2 }
+        // Two tones folded onto the same note become one, louder.
+        if let i = out.firstIndex(where: { abs(log2($0.hz / f)) < 0.05 }) { out[i].amp += tone.amp } else { out.append((f, tone.amp)) }
+    }
+    return out
+}
+
+/// The command line prints a progress bar; the web panel reads the position from the live state instead.
+var printProgress = true
+
+func playMusic(_ frames: [MusicFrame], title: String) {
+    guard !frames.isEmpty else { return }
+    let total = Double(frames.count) * hop
+    live { $0.musicPos = 0; $0.musicTotal = total }
+    let start = mach_absolute_time()
+    var t = 0.0, lastOnset = -1, lastPrint = -1.0
+    while t < total && !interrupted() {
+        let k = min(frames.count - 1, Int(t / hop))
+        let f = frames[k]
+        if f.onset && k != lastOnset {
+            // Kick: a 40 ms pitch dive, like thump() but shorter.
+            lastOnset = k
+            let kickStart = t
+            while t - kickStart < 0.04 && !interrupted() {
+                let hz = 120 + 600 * exp(-(t - kickStart) / 0.012)
+                play([(hz, 1)], ms: 1000 / hz, level: f.level)
+                t += 1 / hz
+                waitUntil(start + UInt64(t * ticksPerSecond))
+            }
+            continue
+        }
+        let tones = lifted(f.tones)
+        if f.level > 0, let base = tones.first?.hz {
+            let seg = max(1, (0.01 * base).rounded()) / base   // whole cycles of the main tone, about 10 ms
+            play(tones, ms: seg * 1000, level: f.level)
+            t += seg
+        } else {
+            t += 0.005
+        }
+        if t - lastPrint >= 0.25 {
+            lastPrint = t
+            live { $0.musicPos = t }
+        }
+        if printProgress && lastPrint == t {
+            let width = 30, done = Int(Double(width) * t / total)
+            let bar = String(repeating: "#", count: done) + String(repeating: ".", count: max(0, width - done))
+            let note = f.level > 0 ? tones.first.map { noteName($0.hz) } ?? "-" : "-"
+            print("\r  ▶ \(clock(t)) / \(clock(total))  [\(bar)]  \(note.padding(toLength: 4, withPad: " ", startingAt: 0))", terminator: "")
+            fflush(stdout)
+        }
+        waitUntil(start + UInt64(t * ticksPerSecond))
+    }
+    live { $0.musicPos = 0; $0.musicTotal = 0 }
+    if printProgress { print("") }
+}
+
+func music(query: String?, path: String?, country: String) {
+    do {
+        var title: String, url: URL, temporary = false
+        if let path {
+            url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+            guard FileManager.default.fileExists(atPath: url.path) else { fail("There's no file at \(url.path).", headline: "nospeaker can't play that file.", code: 66) }
+            title = url.deletingPathExtension().lastPathComponent
+        } else {
+            let q = query ?? ""
+            guard let hit = try searchSongs(q, country: country).first, let preview = URL(string: hit["previewUrl"] as! String) else {
+                throw Problem(headline: "nospeaker couldn't find that song.", message: "Nothing was found for \"\(q)\". Try the artist and the title, or another --country.")
+            }
+            title = songTitle(hit)
+            print("found: \(title)\ndownloading the 30-second preview…")
+            url = try downloadPreview(preview, title: title)
+            temporary = true
+        }
+        defer { if temporary { try? FileManager.default.removeItem(at: url) } }
+        let frames = try prepareSong(url)
+        print("trackpad: ♪ \(title)  (ctrl-c stops)")
+        playMusic(frames, title: title)
+    } catch let p as Problem {
+        fail(p.message, headline: p.headline)
+    } catch {
+        fail("\(error)")
+    }
 }
 
 // MARK: - Terminal
@@ -1514,6 +1842,750 @@ func signOff(seconds: Int, actuations: Int) {
     print("")
 }
 
+// MARK: - Web panel (nospeaker --web)
+//
+// A small HTTP server on 127.0.0.1 with one page that drives everything: find a song, drop in a file, say a
+// line, play the show's sounds, stop, and set the volume. Only this Mac can reach it, and every POST needs an
+// `X-Nospeaker: 1` header, which other websites can't send to it (the server answers no CORS preflight).
+
+/// One thing plays at a time. A new job stops the current one; jobs that were overtaken before they started
+/// are skipped.
+let jobQueue = DispatchQueue(label: "nospeaker.jobs", qos: .userInteractive)
+let jobLock = NSLock()
+var jobGeneration = 0
+var jobName = "", jobState = "idle", jobTitle = "", jobError = ""
+
+func setJob(_ g: Int, state: String, title: String? = nil, error: String? = nil) {
+    jobLock.lock(); defer { jobLock.unlock() }
+    guard g == jobGeneration else { return }
+    jobState = state
+    if let title { jobTitle = title }
+    if let error { jobError = error }
+}
+
+func startJob(_ name: String, title: String, _ work: @escaping (_ playing: @escaping (String) -> Void) throws -> Void) {
+    jobLock.lock()
+    jobGeneration += 1
+    let g = jobGeneration
+    jobName = name; jobState = "loading"; jobTitle = title; jobError = ""
+    jobLock.unlock()
+    skipRequested = true
+    jobQueue.async {
+        jobLock.lock(); let current = g == jobGeneration; jobLock.unlock()
+        guard current else { return }
+        skipRequested = false
+        do {
+            try work { title in setJob(g, state: "playing", title: title) }
+            setJob(g, state: "idle")
+        } catch let p as Problem {
+            setJob(g, state: "error", error: p.message)
+        } catch {
+            setJob(g, state: "error", error: "\(error)")
+        }
+    }
+}
+
+func stopJob() {
+    jobLock.lock(); jobGeneration += 1; jobState = "idle"; jobError = ""; jobLock.unlock()
+    skipRequested = true
+}
+
+// MARK: HTTP
+
+struct Request {
+    var method = "", path = ""
+    var query: [String: String] = [:], headers: [String: String] = [:]
+    var body = Data()
+    var json: [String: Any] { ((try? JSONSerialization.jsonObject(with: body)) as? [String: Any]) ?? [:] }
+}
+
+let maxUpload = 300 * 1024 * 1024
+
+func readRequest(_ c: Int32) -> Request? {
+    var buf = Data()
+    var chunk = [UInt8](repeating: 0, count: 65536)
+    let separator = Data("\r\n\r\n".utf8)
+    var headerEnd: Range<Data.Index>?
+    while headerEnd == nil {
+        let n = read(c, &chunk, chunk.count)
+        if n <= 0 { return nil }
+        buf.append(chunk, count: n)
+        headerEnd = buf.range(of: separator)
+        if headerEnd == nil && buf.count > 64 * 1024 { return nil }
+    }
+    var lines = String(decoding: buf[..<headerEnd!.lowerBound], as: UTF8.self).components(separatedBy: "\r\n")
+    let first = lines.removeFirst().split(separator: " ")
+    guard first.count >= 2 else { return nil }
+    var r = Request()
+    r.method = String(first[0])
+    let comps = URLComponents(string: String(first[1]))
+    r.path = comps?.path ?? String(first[1])
+    for q in comps?.queryItems ?? [] { r.query[q.name] = q.value ?? "" }
+    for l in lines {
+        guard let i = l.firstIndex(of: ":") else { continue }
+        r.headers[l[..<i].lowercased()] = l[l.index(after: i)...].trimmingCharacters(in: .whitespaces)
+    }
+    let length = Int(r.headers["content-length"] ?? "0") ?? 0
+    guard length >= 0, length <= maxUpload else { return nil }
+    var body = Data(buf[headerEnd!.upperBound...])
+    while body.count < length {
+        let n = read(c, &chunk, min(chunk.count, length - body.count))
+        if n <= 0 { return nil }
+        body.append(chunk, count: n)
+    }
+    r.body = body
+    return r
+}
+
+/// Writes everything, or returns false once the browser has gone.
+@discardableResult
+func writeAll(_ c: Int32, _ data: Data) -> Bool {
+    data.withUnsafeBytes { p in
+        var off = 0
+        while off < p.count {
+            let n = write(c, p.baseAddress! + off, p.count - off)
+            if n <= 0 { return false }
+            off += n
+        }
+        return true
+    }
+}
+
+func respond(_ c: Int32, _ status: String, _ type: String, _ body: Data) {
+    var out = Data("HTTP/1.1 \(status)\r\nContent-Type: \(type)\r\nContent-Length: \(body.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n".utf8)
+    out.append(body)
+    writeAll(c, out)
+}
+
+/// The fingers on the trackpad as a stream (Server-Sent Events): ~30 times a second while the instrument
+/// plays, 4 times a second otherwise. Ends when the page closes.
+func streamTouches(_ c: Int32) {
+    guard writeAll(c, Data("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: keep-alive\r\n\r\n".utf8)) else { return }
+    while true {
+        let s = snapshot()
+        let sounding = now() - s.lastPlay < 0.12
+        let fingers = contacts.map { ["x": Double($0.x), "y": Double($0.y), "size": Double($0.size), "id": Int($0.id)] as [String: Any] }
+        let event: [String: Any] = ["active": touchActive, "touches": fingers,
+                                    "note": sounding && s.hz > 0 ? noteName(s.hz) : "", "hz": sounding ? s.hz : 0]
+        var out = Data("data: ".utf8)
+        out.append((try? JSONSerialization.data(withJSONObject: event)) ?? Data("{}".utf8))
+        out.append(Data("\n\n".utf8))
+        if !writeAll(c, out) { return }
+        usleep(touchActive ? 33_000 : 250_000)
+    }
+}
+
+/// Measured once: the trackpad's size in mm, for drawing it in the panel at the right shape.
+var padMM: (w: Double, h: Double)? = nil
+
+func sendJSON(_ c: Int32, _ obj: Any, status: String = "200 OK") {
+    respond(c, status, "application/json; charset=utf-8", (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{}".utf8))
+}
+
+func sendError(_ c: Int32, _ message: String, status: String = "400 Bad Request") { sendJSON(c, ["error": message], status: status) }
+
+/// The voices `say` knows, with their language.
+func listVoices() -> [[String: String]] {
+    let p = Process(), pipe = Pipe()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+    p.arguments = ["-v", "?"]
+    p.standardOutput = pipe
+    guard (try? p.run()) != nil else { return [] }
+    let text = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    p.waitUntilExit()
+    return text.split(separator: "\n").compactMap { line in
+        let l = String(line)
+        guard let r = l.range(of: #"\s{2,}[a-z]{2,3}_[A-Za-z0-9]+\s+#"#, options: .regularExpression) else { return nil }
+        let lang = l[r].trimmingCharacters(in: .whitespaces).dropLast().trimmingCharacters(in: .whitespaces)
+        return ["name": String(l[..<r.lowerBound]).trimmingCharacters(in: .whitespaces), "lang": lang]
+    }
+}
+
+func status() -> [String: Any] {
+    let s = snapshot()
+    jobLock.lock(); defer { jobLock.unlock() }
+    let sounding = now() - s.lastPlay < 0.12
+    return ["state": jobState, "job": jobName, "title": jobTitle, "error": jobError,
+            "pos": s.musicPos, "total": s.musicTotal,
+            "hz": sounding ? s.hz : 0, "note": sounding && s.hz > 0 ? noteName(s.hz) : "",
+            "level": sounding ? s.level : 0, "volume": Int((masterVolume * 100).rounded()),
+            "octaves": musicOctaves, "floor": musicFloor,
+            "pad": padMM.map { [$0.w, $0.h] } ?? [] as [Double],
+            "actuations": s.actuations, "touch": s.touchDown, "model": macModel()]
+}
+
+func playSongFile(_ url: URL, title: String, temporary: Bool, playing: (String) -> Void) throws {
+    defer { if temporary { try? FileManager.default.removeItem(at: url) } }
+    let frames = try prepareSong(url)
+    guard !interrupted() else { return }
+    playing(title)
+    playMusic(frames, title: title)
+}
+
+func handleClient(_ c: Int32) {
+    defer { close(c) }
+    guard let r = readRequest(c) else { return }
+    let host = (r.headers["host"] ?? "").lowercased()
+    guard host.hasPrefix("127.0.0.1:") || host.hasPrefix("localhost:") else { sendError(c, "forbidden", status: "403 Forbidden"); return }
+    if r.method == "POST" && r.headers["x-nospeaker"] != "1" { sendError(c, "forbidden", status: "403 Forbidden"); return }
+
+    switch (r.method, r.path) {
+    case ("GET", "/"):
+        respond(c, "200 OK", "text/html; charset=utf-8", Data(panelHTML.utf8))
+
+    case ("GET", "/api/status"):
+        sendJSON(c, status())
+
+    case ("GET", "/api/touch"):
+        streamTouches(c)
+
+    case ("GET", "/api/voices"):
+        sendJSON(c, listVoices())
+
+    case ("GET", "/api/search"):
+        let q = (r.query["q"] ?? "").trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { sendJSON(c, []); return }
+        do {
+            let hits = try searchSongs(q, country: r.query["country"] ?? "us", limit: 15)
+            sendJSON(c, hits.map { h in
+                ["title": h["trackName"] as? String ?? "", "artist": h["artistName"] as? String ?? "",
+                 "album": h["collectionName"] as? String ?? "", "art": h["artworkUrl100"] as? String ?? "",
+                 "preview": h["previewUrl"] as? String ?? ""]
+            })
+        } catch let p as Problem { sendError(c, p.message, status: "502 Bad Gateway") } catch { sendError(c, "\(error)") }
+
+    case ("POST", "/api/preview"):
+        let j = r.json
+        let title = j["title"] as? String ?? "song"
+        // Only Apple's preview servers: this endpoint isn't a general downloader.
+        guard let s = j["url"] as? String, let url = URL(string: s), url.scheme == "https",
+              let h = url.host, h.hasSuffix(".apple.com") else { sendError(c, "That isn't an iTunes preview link."); return }
+        startJob("song", title: title) { playing in
+            let file = try downloadPreview(url, title: title)
+            try playSongFile(file, title: title, temporary: true, playing: playing)
+        }
+        sendJSON(c, ["ok": true])
+
+    case ("POST", "/api/upload"):
+        guard !r.body.isEmpty else { sendError(c, "The file is empty."); return }
+        let name = (r.query["name"] ?? "song").replacingOccurrences(of: "/", with: "_")
+        let ext = (name as NSString).pathExtension.isEmpty ? "audio" : (name as NSString).pathExtension
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("nospeaker-\(getpid())-\(UUID().uuidString.prefix(8)).\(ext)")
+        do { try r.body.write(to: file) } catch { sendError(c, "Couldn't save the upload.", status: "500 Internal Server Error"); return }
+        let title = (name as NSString).deletingPathExtension
+        startJob("file", title: title) { playing in try playSongFile(file, title: title, temporary: true, playing: playing) }
+        sendJSON(c, ["ok": true])
+
+    case ("POST", "/api/say"):
+        let j = r.json
+        var text = (j["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        while text.hasPrefix("-") { text.removeFirst() }   // `say` would read it as an option
+        guard !text.isEmpty else { sendError(c, "Type something to say."); return }
+        let voice = (j["voice"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        if let voice, !voiceExists(voice) { sendError(c, "There's no voice called \"\(voice)\" on this Mac."); return }
+        startJob("say", title: text) { playing in
+            voiceName = voice
+            let frames = render(text)
+            guard !interrupted() else { return }
+            playing(text)
+            talk(frames, text: text)
+        }
+        sendJSON(c, ["ok": true])
+
+    case ("POST", "/api/sound"):
+        let name = r.json["name"] as? String ?? ""
+        let sounds: [String: (String, () -> Void)] = [
+            "sweep": ("Sweep, 100 Hz → 4 kHz", { sweep(seconds: 6) }),
+            "heartbeat": ("Heartbeat", { heartbeat() }),
+            "sing": ("Melody", { sing() }),
+            "sparkle": ("Sparkle", { sparkle() }),
+            "beat": ("Beat with a rap", {
+                let line = "No speaker. No wires. Just a motor and a beat."
+                voiceName = nil
+                groove(bars: 4, rapBar: 2, rap: render(line), rapText: line)
+            }),
+            "touch": ("Instrument: touch the trackpad", { touchToPlay(endless: true) }),
+            "jingle": ("Jingle Bells", { playMelody(jingleBells, bpm: 160) }),
+            "birthday": ("Happy Birthday", { playMelody(happyBirthday, bpm: 110) }),
+        ]
+        guard let (title, run) = sounds[name] else { sendError(c, "Unknown sound."); return }
+        if name == "touch" && (registerCallback == nil || touchDevices().isEmpty) {
+            sendError(c, "This Mac doesn't let nospeaker read the trackpad's touches."); return
+        }
+        startJob(name, title: title) { playing in playing(title); run() }
+        sendJSON(c, ["ok": true])
+
+    case ("POST", "/api/pitch"):
+        let j = r.json
+        if let o = (j["octaves"] as? NSNumber)?.doubleValue { musicOctaves = max(0, min(2, o.rounded())) }
+        if let f = (j["floor"] as? NSNumber)?.doubleValue { musicFloor = max(0, min(2000, f)) }
+        sendJSON(c, ["ok": true, "octaves": musicOctaves, "floor": musicFloor])
+
+    case ("POST", "/api/stop"):
+        stopJob()
+        sendJSON(c, ["ok": true])
+
+    case ("POST", "/api/volume"):
+        let v = (r.json["value"] as? NSNumber)?.doubleValue ?? 100
+        masterVolume = Float(max(0, min(100, v)) / 100)
+        sendJSON(c, ["ok": true, "volume": Int((masterVolume * 100).rounded())])
+
+    default:
+        sendError(c, "not found", status: "404 Not Found")
+    }
+}
+
+func webPanel(port: UInt16, openBrowser: Bool) -> Never {
+    printProgress = false
+    padMM = padSize()
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    guard fd >= 0 else { fail("It couldn't open a network socket.", headline: "nospeaker couldn't start the web panel.") }
+    var yes: Int32 = 1
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+    var addr = sockaddr_in()
+    addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    addr.sin_family = sa_family_t(AF_INET)
+    addr.sin_port = port.bigEndian
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+    let bound = withUnsafePointer(to: &addr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+    guard bound == 0, listen(fd, 32) == 0 else {
+        fail("Port \(port) is already in use. Pick another one: nospeaker --web --port 4848", headline: "nospeaker couldn't start the web panel.")
+    }
+    let address = "http://127.0.0.1:\(port)"
+    print("NO SPEAKER web panel: \(address)\n(only this Mac can open it · ctrl-c stops)")
+    fflush(stdout)
+    if openBrowser {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        p.arguments = [address]
+        try? p.run()
+    }
+    while true {
+        let c = accept(fd, nil, nil)
+        if c < 0 { continue }
+        var on: Int32 = 1
+        setsockopt(c, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        DispatchQueue.global(qos: .userInitiated).async { handleClient(c) }
+    }
+}
+
+let panelHTML = #"""
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NO SPEAKER panel</title>
+<link rel="icon" href="data:,">
+<style>
+:root {
+  --bg: #f6f5f1; --card: #ffffff; --ink: #1b1b1a; --body: #3d3d3a; --muted: #8a8984; --line: #e4e2db;
+  --accent: #e0472b; --accent-soft: #fdebe6; --ok: #2f8a4f;
+  --r: 14px; --mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; }
+.wrap { max-width: 860px; margin: 0 auto; padding: 20px 16px 60px; }
+header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+h1 { font: 700 22px/1 var(--mono); letter-spacing: .04em; margin: 0; }
+h1 span { color: var(--accent); }
+.sub { color: var(--muted); font-size: 13px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; margin-bottom: 14px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+
+/* now playing */
+.now { position: sticky; top: 10px; z-index: 5; box-shadow: 0 6px 20px rgba(0,0,0,.05); }
+.now-top { display: flex; align-items: center; gap: 12px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--line); flex: none; }
+.dot.playing { background: var(--accent); animation: pulse 1s infinite; }
+.dot.loading { background: #e5a829; }
+.dot.error { background: #b3261e; }
+@keyframes pulse { 50% { opacity: .35; } }
+.now-title { font-weight: 600; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.now-state { color: var(--muted); font-size: 13px; }
+.bar { height: 6px; background: var(--line); border-radius: 3px; margin: 12px 0 6px; overflow: hidden; }
+.bar > div { height: 100%; width: 0; background: var(--accent); transition: width .25s linear; }
+.now-meta { display: flex; justify-content: space-between; font: 13px var(--mono); color: var(--muted); }
+.now-meta b { color: var(--ink); font-weight: 600; }
+.now-controls { display: flex; align-items: center; gap: 14px; margin-top: 12px; flex-wrap: wrap; }
+.vol { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 200px; font-size: 13px; color: var(--muted); }
+.vol input { flex: 1; accent-color: var(--accent); }
+.vol output { font: 600 13px var(--mono); color: var(--ink); width: 42px; text-align: right; }
+.pitch { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.pitch select { width: auto; padding: 6px 10px; font-size: 13px; }
+.err { color: #b3261e; font-size: 13px; margin-top: 8px; }
+
+/* tabs */
+.tabs { display: flex; gap: 6px; margin: 4px 0 14px; overflow-x: auto; }
+.tab { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 8px 14px; font: inherit; font-size: 14px; color: var(--body); cursor: pointer; white-space: nowrap; }
+.tab[aria-selected="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+.pane[hidden] { display: none; }
+
+input[type=text], textarea, select { font: inherit; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: #fff; color: var(--ink); width: 100%; }
+textarea { min-height: 84px; resize: vertical; }
+input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+.row { display: flex; gap: 8px; }
+.row > .grow { flex: 1; min-width: 0; }
+.row select { width: auto; }
+button.btn { font: inherit; font-weight: 600; border: 0; border-radius: 10px; padding: 10px 16px; background: var(--accent); color: #fff; cursor: pointer; white-space: nowrap; }
+button.btn.ghost { background: var(--card); color: var(--ink); border: 1px solid var(--line); }
+button.btn:disabled { opacity: .5; cursor: default; }
+
+.results { list-style: none; margin: 12px 0 0; padding: 0; }
+.results li { display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: 10px; cursor: pointer; }
+.results li:hover { background: var(--bg); }
+.results li.on { background: var(--accent-soft); }
+.results img { width: 48px; height: 48px; border-radius: 6px; flex: none; background: var(--line); }
+.results .t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.results .a { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.results .txt { flex: 1; min-width: 0; }
+.results .play { color: var(--accent); font-size: 20px; flex: none; }
+.hint { color: var(--muted); font-size: 13px; margin-top: 10px; }
+
+.drop { border: 2px dashed var(--line); border-radius: var(--r); padding: 34px 16px; text-align: center; color: var(--muted); cursor: pointer; }
+.drop.over { border-color: var(--accent); background: var(--accent-soft); color: var(--ink); }
+.drop b { color: var(--ink); }
+
+.sounds { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.sound { text-align: left; border: 1px solid var(--line); background: var(--card); border-radius: 12px; padding: 14px; cursor: pointer; font: inherit; color: var(--ink); }
+.sound:hover { border-color: var(--accent); }
+.sound .n { font-weight: 600; display: block; }
+.sound .d { color: var(--muted); font-size: 13px; }
+.padwrap { position: relative; }
+#pad { display: block; width: 100%; aspect-ratio: 1.6; background: #fff; border: 1px solid var(--line); border-radius: 18px; box-shadow: inset 0 1px 6px rgba(0,0,0,.05); touch-action: none; }
+.padnote { position: absolute; top: 12px; right: 16px; font: 700 26px var(--mono); color: var(--ink); }
+.padhint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 14px; pointer-events: none; text-align: center; padding: 0 16px; }
+.padbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+.legend { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.legend i { width: 120px; height: 8px; border-radius: 4px; background: linear-gradient(90deg, rgb(59,130,246), rgb(16,185,129), rgb(245,158,11), rgb(220,38,38)); }
+.tips { color: var(--muted); font-size: 13px; margin: 0; padding-left: 18px; }
+
+@media (max-width: 560px) {
+  body { font-size: 14px; }
+  .wrap { padding: 12px 12px 40px; }
+  h1 { font-size: 18px; }
+  .now { top: 6px; padding: 12px; }
+  .row.wrapable { flex-wrap: wrap; }
+  .row.wrapable select, .row.wrapable button { flex: 1; }
+  .sounds { grid-template-columns: 1fr 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>NO <span>SPEAKER</span></h1>
+    <div class="sub" id="model">trackpad control panel</div>
+  </header>
+
+  <section class="card now" aria-live="polite">
+    <div class="now-top">
+      <div class="dot" id="dot"></div>
+      <div class="now-title" id="title">Nothing playing</div>
+      <div class="now-state" id="state">idle</div>
+    </div>
+    <div class="bar"><div id="progress"></div></div>
+    <div class="now-meta"><span id="time">0:00 / 0:00</span><span>motor <b id="hz">–</b></span></div>
+    <div class="now-controls">
+      <button class="btn" id="stop">■ Stop</button>
+      <label class="vol">Volume <input type="range" id="vol" min="0" max="100" value="100"><output id="volOut">100%</output></label>
+      <label class="pitch">Pitch
+        <select id="pitch" title="Music only: low notes are quiet on the motor and blur together">
+          <option value="0,0">original</option>
+          <option value="0,400" selected>lift low notes</option>
+          <option value="1,400">+1 octave</option>
+          <option value="2,400">+2 octaves</option>
+        </select>
+      </label>
+    </div>
+    <div class="err" id="err" hidden></div>
+  </section>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab" role="tab" data-tab="song" aria-selected="true">♪ Song</button>
+    <button class="tab" role="tab" data-tab="file">File</button>
+    <button class="tab" role="tab" data-tab="say">Say</button>
+    <button class="tab" role="tab" data-tab="touch">Instrument</button>
+    <button class="tab" role="tab" data-tab="sounds">Sounds</button>
+  </nav>
+
+  <section class="card pane" id="pane-song">
+    <h2>Find a song</h2>
+    <form class="row wrapable" id="searchForm">
+      <input type="text" class="grow" id="q" placeholder="artist and title, e.g. billie eilish bad guy" autocomplete="off">
+      <select id="country" title="iTunes store">
+        <option value="us">US</option><option value="kz">KZ</option><option value="ru">RU</option>
+        <option value="gb">UK</option><option value="de">DE</option><option value="jp">JP</option>
+      </select>
+      <button class="btn" type="submit">Search</button>
+    </form>
+    <ul class="results" id="results"></ul>
+    <div class="hint" id="searchHint">Plays the 30-second preview from Apple's iTunes Search. Click a result to play it.</div>
+  </section>
+
+  <section class="card pane" id="pane-file" hidden>
+    <h2>Play a file</h2>
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept="audio/*,.mp3,.m4a,.wav,.aiff,.flac" hidden>
+      <b>Drop an audio file here</b><br>or click to choose · mp3, m4a, wav, aiff, flac
+    </label>
+    <div class="hint">Plays the whole file. Songs with DRM (Apple Music downloads) can't be read.</div>
+  </section>
+
+  <section class="card pane" id="pane-say" hidden>
+    <h2>Say something</h2>
+    <textarea id="sayText" placeholder="hello from the trackpad"></textarea>
+    <div class="row wrapable" style="margin-top:8px">
+      <select id="voice" class="grow"><option value="">Default voice</option></select>
+      <button class="btn" id="sayBtn">Say it</button>
+    </div>
+    <div class="hint">Short English lines are the easiest to follow. ⌘↩ says it.</div>
+  </section>
+
+  <section class="card pane" id="pane-touch" hidden>
+    <h2>Instrument</h2>
+    <div class="padwrap">
+      <canvas id="pad" aria-label="Your trackpad: where you touch and how hard"></canvas>
+      <div class="padnote" id="padNote"></div>
+      <div class="padhint" id="padHint">Press Start, then touch the trackpad</div>
+    </div>
+    <div class="padbar">
+      <button class="btn" id="touchBtn">Start</button>
+      <div class="legend"><span>light</span><i></i><span>firm</span></div>
+    </div>
+    <div class="hint">Left to right is the note, up adds vibrato, pressing with more of your finger is louder. Plays until you press Stop.</div>
+  </section>
+
+  <section class="card pane" id="pane-sounds" hidden>
+    <h2>Sounds from the show</h2>
+    <div class="sounds">
+      <button class="sound" data-sound="sweep"><span class="n">Sweep</span><span class="d">100 Hz → 4 kHz, 6 s</span></button>
+      <button class="sound" data-sound="heartbeat"><span class="n">Heartbeat</span><span class="d">felt more than heard</span></button>
+      <button class="sound" data-sound="sing"><span class="n">Melody</span><span class="d">the motor's cleanest octave</span></button>
+      <button class="sound" data-sound="beat"><span class="n">Beat + rap</span><span class="d">drums, bass and a voice</span></button>
+      <button class="sound" data-sound="jingle"><span class="n">Jingle Bells</span><span class="d">the chorus</span></button>
+      <button class="sound" data-sound="birthday"><span class="n">Happy Birthday</span><span class="d">the whole verse</span></button>
+      <button class="sound" data-sound="sparkle"><span class="n">Sparkle</span><span class="d">arpeggio up to 3.9 kHz</span></button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>For the loudest sound</h2>
+    <ul class="tips">
+      <li>Put the Mac on a hard table, not your lap.</li>
+      <li>Keep your hands off the glass (except for Instrument).</li>
+      <li>Mute the Mac: the trackpad still plays, that's the point.</li>
+    </ul>
+  </section>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const H = { 'X-Nospeaker': '1' };
+
+async function api(path, body) {
+  const opt = body === undefined ? {} : { method: 'POST', headers: { ...H, 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+  const r = await fetch(path, opt);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+function showErr(msg) { const e = $('#err'); e.textContent = msg || ''; e.hidden = !msg; }
+const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+// tabs
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', x === t));
+  document.querySelectorAll('.pane').forEach(p => p.hidden = p.id !== 'pane-' + t.dataset.tab);
+  try { localStorage.setItem('ns-tab', t.dataset.tab); } catch (e) {}
+}));
+try { const t = localStorage.getItem('ns-tab'); if (t) document.querySelector(`.tab[data-tab="${t}"]`)?.click(); } catch (e) {}
+
+// status
+const stateText = { idle: 'idle', loading: 'loading…', playing: 'playing', error: 'error' };
+let volTouched = 0;
+async function poll() {
+  try {
+    const s = await api('/api/status');
+    $('#dot').className = 'dot ' + s.state;
+    $('#title').textContent = s.state === 'idle' && !s.title ? 'Nothing playing' : (s.title || '—');
+    $('#state').textContent = stateText[s.state] || s.state;
+    const total = s.total || 0, pos = Math.min(s.pos || 0, total);
+    $('#progress').style.width = total ? (pos / total * 100) + '%' : (s.state === 'playing' ? '100%' : '0');
+    $('#time').textContent = total ? `${clock(pos)} / ${clock(total)}` : (s.state === 'playing' ? 'live' : '0:00 / 0:00');
+    $('#hz').textContent = s.hz ? `${Math.round(s.hz)} Hz · ${s.note}` : '–';
+    if (Date.now() - volTouched > 1500) {
+      $('#vol').value = s.volume; $('#volOut').textContent = s.volume + '%';
+      const p = `${s.octaves},${s.floor}`;
+      if ([...$('#pitch').options].some(o => o.value === p)) $('#pitch').value = p;
+    }
+    showErr(s.state === 'error' ? s.error : '');
+    setPadShape(s.pad);
+    if (s.model) $('#model').textContent = 'trackpad control panel · ' + s.model;
+  } catch (e) {
+    $('#dot').className = 'dot error';
+    $('#state').textContent = 'offline';
+    showErr('The panel lost nospeaker. Is `nospeaker --web` still running?');
+  }
+  setTimeout(poll, 300);
+}
+poll();
+
+$('#stop').addEventListener('click', () => api('/api/stop', {}).catch(e => showErr(e.message)));
+
+let volTimer;
+$('#vol').addEventListener('input', e => {
+  volTouched = Date.now();
+  $('#volOut').textContent = e.target.value + '%';
+  clearTimeout(volTimer);
+  volTimer = setTimeout(() => api('/api/volume', { value: +e.target.value }).catch(err => showErr(err.message)), 80);
+});
+
+$('#pitch').addEventListener('change', e => {
+  volTouched = Date.now();
+  const [octaves, floor] = e.target.value.split(',').map(Number);
+  api('/api/pitch', { octaves, floor }).catch(err => showErr(err.message));
+});
+
+// song search
+try { const c = localStorage.getItem('ns-country'); if (c) $('#country').value = c; } catch (e) {}
+$('#country').addEventListener('change', e => { try { localStorage.setItem('ns-country', e.target.value); } catch (x) {} });
+$('#searchForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const q = $('#q').value.trim();
+  if (!q) return;
+  const ul = $('#results'), hint = $('#searchHint');
+  ul.innerHTML = ''; hint.textContent = 'Searching…';
+  try {
+    const list = await api(`/api/search?q=${encodeURIComponent(q)}&country=${$('#country').value}`);
+    hint.textContent = list.length ? 'Click a result to play its 30-second preview.' : 'Nothing found. Try the artist and the title, or another store.';
+    for (const s of list) {
+      const li = document.createElement('li');
+      li.innerHTML = `<img alt="" loading="lazy"><div class="txt"><div class="t"></div><div class="a"></div></div><div class="play">▶</div>`;
+      li.querySelector('img').src = s.art;
+      li.querySelector('.t').textContent = s.title;
+      li.querySelector('.a').textContent = s.artist + (s.album ? ' · ' + s.album : '');
+      li.addEventListener('click', () => {
+        ul.querySelectorAll('li').forEach(x => x.classList.toggle('on', x === li));
+        api('/api/preview', { url: s.preview, title: `${s.artist} — ${s.title}` }).catch(err => showErr(err.message));
+      });
+      ul.appendChild(li);
+    }
+  } catch (err) { hint.textContent = ''; showErr(err.message); }
+});
+
+// file
+async function upload(f) {
+  if (!f) return;
+  showErr('');
+  $('#title').textContent = 'Uploading ' + f.name + '…';
+  try {
+    const r = await fetch('/api/upload?name=' + encodeURIComponent(f.name), { method: 'POST', headers: H, body: f });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+  } catch (e) { showErr(e.message); }
+}
+const drop = $('#drop');
+$('#file').addEventListener('change', e => upload(e.target.files[0]));
+['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => upload(e.dataTransfer.files[0]));
+
+// say
+api('/api/voices').then(vs => {
+  const sel = $('#voice');
+  vs.sort((a, b) => (a.lang.startsWith('en') ? 0 : 1) - (b.lang.startsWith('en') ? 0 : 1) || a.name.localeCompare(b.name));
+  for (const v of vs) { const o = document.createElement('option'); o.value = v.name; o.textContent = `${v.name} · ${v.lang}`; sel.appendChild(o); }
+  try { const v = localStorage.getItem('ns-voice'); if (v) sel.value = v; } catch (e) {}
+}).catch(() => {});
+$('#voice').addEventListener('change', e => { try { localStorage.setItem('ns-voice', e.target.value); } catch (x) {} });
+function say() {
+  const text = $('#sayText').value.trim();
+  if (!text) return;
+  api('/api/say', { text, voice: $('#voice').value }).catch(e => showErr(e.message));
+}
+$('#sayBtn').addEventListener('click', say);
+$('#sayText').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); say(); } });
+
+// instrument: the trackpad as a heatmap
+const pad = $('#pad'), pctx = pad.getContext('2d');
+const trail = document.createElement('canvas'), tctx = trail.getContext('2d');
+const padNotes = ['G5', 'A5', 'B5', 'C6', 'E6', 'F6', 'G6', 'A6', 'B6', 'C7'];
+let touchState = { active: false, touches: [] }, maxSize = 0.8, padShapeSet = false;
+const heatStops = [[0, [59, 130, 246]], [0.35, [16, 185, 129]], [0.7, [245, 158, 11]], [1, [220, 38, 38]]];
+function heat(t) {
+  for (let i = 1; i < heatStops.length; i++) {
+    const [p1, c1] = heatStops[i], [p0, c0] = heatStops[i - 1];
+    if (t <= p1) { const u = (t - p0) / (p1 - p0); return c0.map((v, k) => Math.round(v + (c1[k] - v) * u)); }
+  }
+  return heatStops[heatStops.length - 1][1];
+}
+function setPadShape(mm) {
+  if (padShapeSet || !mm || mm.length !== 2) return;
+  pad.style.aspectRatio = `${mm[0]} / ${mm[1]}`;
+  padShapeSet = true;
+}
+function drawPad() {
+  const dpr = window.devicePixelRatio || 1;
+  const W = Math.round(pad.clientWidth * dpr), H = Math.round(pad.clientHeight * dpr);
+  if (!W || !H) { requestAnimationFrame(drawPad); return; }
+  if (pad.width !== W || pad.height !== H) { pad.width = W; pad.height = H; trail.width = W; trail.height = H; }
+  // the trail fades out
+  tctx.globalCompositeOperation = 'destination-out';
+  tctx.fillStyle = 'rgba(0,0,0,0.04)';
+  tctx.fillRect(0, 0, W, H);
+  tctx.globalCompositeOperation = 'source-over';
+  const live = touchState.touches.map(t => {
+    maxSize = Math.max(maxSize, t.size);
+    const temp = Math.max(0, Math.min(1, t.size / maxSize));
+    return { x: t.x * W, y: (1 - t.y) * H, temp, rgb: heat(temp) };
+  });
+  for (const t of live) {
+    const r = (0.05 + 0.07 * t.temp) * W;
+    const g = tctx.createRadialGradient(t.x, t.y, 0, t.x, t.y, r);
+    g.addColorStop(0, `rgba(${t.rgb},0.20)`); g.addColorStop(1, `rgba(${t.rgb},0)`);
+    tctx.fillStyle = g; tctx.beginPath(); tctx.arc(t.x, t.y, r, 0, Math.PI * 2); tctx.fill();
+  }
+  pctx.clearRect(0, 0, W, H);
+  // note columns
+  pctx.strokeStyle = '#efeee9'; pctx.lineWidth = dpr;
+  pctx.fillStyle = '#b9b7b0'; pctx.font = `${11 * dpr}px ui-monospace, Menlo, monospace`; pctx.textAlign = 'center';
+  for (let i = 0; i < padNotes.length; i++) {
+    if (i) { pctx.beginPath(); pctx.moveTo(i * W / 10, 0); pctx.lineTo(i * W / 10, H); pctx.stroke(); }
+    pctx.fillText(padNotes[i], (i + 0.5) * W / 10, H - 10 * dpr);
+  }
+  pctx.drawImage(trail, 0, 0);
+  // fingers now: half-transparent dots
+  for (const t of live) {
+    const r = (0.025 + 0.03 * t.temp) * W;
+    pctx.fillStyle = `rgba(${t.rgb},0.45)`; pctx.strokeStyle = `rgba(${t.rgb},0.9)`; pctx.lineWidth = 2 * dpr;
+    pctx.beginPath(); pctx.arc(t.x, t.y, r, 0, Math.PI * 2); pctx.fill(); pctx.stroke();
+  }
+  requestAnimationFrame(drawPad);
+}
+requestAnimationFrame(drawPad);
+function openTouchStream() {
+  const es = new EventSource('/api/touch');
+  es.onmessage = e => {
+    try { touchState = JSON.parse(e.data); } catch (x) { return; }
+    $('#padNote').textContent = touchState.note || '';
+    $('#padHint').textContent = touchState.active ? (touchState.touches.length ? '' : 'Touch the trackpad') : 'Press Start, then touch the trackpad';
+    $('#touchBtn').textContent = touchState.active ? '■ Stop' : 'Start';
+  };
+  es.onerror = () => { es.close(); setTimeout(openTouchStream, 1500); };
+}
+openTouchStream();
+$('#touchBtn').addEventListener('click', () => {
+  if (touchState.active) api('/api/stop', {}).catch(e => showErr(e.message));
+  else api('/api/sound', { name: 'touch' }).catch(e => showErr(e.message));
+});
+
+// sounds
+document.querySelectorAll('.sound').forEach(b => b.addEventListener('click', () => api('/api/sound', { name: b.dataset.sound }).catch(e => showErr(e.message))));
+</script>
+</body>
+</html>
+"""#
+
 // MARK: - Main
 
 var args = Array(CommandLine.arguments.dropFirst())
@@ -1533,6 +2605,16 @@ if flag("--help") || flag("-h") {
       nospeaker                         the show (space skips a part, q goes to the end)
       nospeaker "any words"             just say something
       nospeaker --sweep                 a rising tone, 100 Hz to 4 kHz
+      nospeaker --song "daft punk one more time"
+                                        find a song and play its 30-second preview
+      nospeaker --file ~/Music/song.mp3 play any audio file
+      --country kz                      which iTunes store to search (default us)
+      --octave 1                        music: move the whole song up 1 or 2 octaves (default 0)
+      --floor 400                       music: lift notes below this many Hz by octaves (default 400, 0 = off)
+      nospeaker --sound sparkle         one sound: sparkle, heartbeat, sing, sweep, jingle, birthday
+      --volume 50                       0 to 100 (default 100); never past the motor's normal maximum
+      nospeaker --web                   a control panel in your browser for all of it
+      --port 4848                       the panel's port (default 4747); --no-open skips opening the browser
       --voice Daniel                    any voice from `say -v '?'`
       --dark                            white on black instead of black on white
       --plain                           no visuals
@@ -1550,6 +2632,38 @@ if let v = voiceName, !voiceExists(v) {
 applyTheme(light: !flag("--dark"))
 let plain = flag("--plain")
 let wantsSweep = flag("--sweep")
+let countryCode = option("--country", example: "kz") ?? "us"
+let wantsWeb = flag("--web")
+if let v = option("--octave", example: "1") {
+    guard let n = Double(v), [0.0, 1, 2].contains(n) else { usageError("--octave needs 0, 1 or 2, like: --octave 1") }
+    musicOctaves = n
+}
+if let v = option("--floor", example: "400") {
+    guard let n = Double(v), n >= 0, n <= 2000 else { usageError("--floor needs a frequency from 0 (off) to 2000 Hz, like: --floor 400") }
+    musicFloor = n
+}
+let soundName = option("--sound", example: "sparkle")
+let standaloneSounds: [String: () -> Void] = ["sparkle": { sparkle() }, "heartbeat": { heartbeat() }, "sing": { sing() }, "sweep": { sweep(seconds: 6) },
+                                              "jingle": { playMelody(jingleBells, bpm: 160) }, "birthday": { playMelody(happyBirthday, bpm: 110) }]
+if let soundName, standaloneSounds[soundName] == nil {
+    usageError("There's no sound called \"\(soundName)\". Try: \(standaloneSounds.keys.sorted().joined(separator: ", "))")
+}
+if let v = option("--volume", example: "50") {
+    guard let n = Double(v), n >= 0, n <= 100 else { usageError("--volume needs a number from 0 to 100, like: --volume 50") }
+    masterVolume = Float(n / 100)
+}
+let noOpen = flag("--no-open")
+let portText = option("--port", example: "4848")
+guard let webPort = UInt16(portText ?? "4747"), webPort > 0 else { usageError("--port needs a number from 1 to 65535, like: --port 4848") }
+let songFile = option("--file", example: "~/Music/song.mp3")
+var songQuery: String?
+if let i = args.firstIndex(of: "--song") {
+    // Everything after --song that isn't an option is the search, quoted or not.
+    let rest = args[(i + 1)...].filter { !$0.hasPrefix("-") }
+    guard !rest.isEmpty else { usageError("--song needs something to search for, like: --song \"daft punk one more time\"") }
+    songQuery = rest.joined(separator: " ")
+    args = Array(args[..<i]) + args[(i + 1)...].filter { $0.hasPrefix("-") }
+}
 if let unknown = args.first(where: { $0.hasPrefix("-") }) { usageError("\"\(unknown)\" isn't an option.") }
 
 signal(SIGINT) { _ in requestEnd() }
@@ -1559,7 +2673,17 @@ atexit { restoreTerminal() }
 motor = openMotor()
 motorPointer = Unmanaged.passUnretained(motor! as AnyObject).toOpaque()
 
-if wantsSweep || !args.isEmpty {
+if wantsWeb {
+    signal(SIGINT) { _ in exit(0) }
+    signal(SIGTERM) { _ in exit(0) }
+    webPanel(port: webPort, openBrowser: !noOpen)
+} else if let soundName {
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
+    standaloneSounds[soundName]!()
+} else if songQuery != nil || songFile != nil {
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
+    music(query: songQuery, path: songFile, country: countryCode)
+} else if wantsSweep || !args.isEmpty {
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
     if wantsSweep { print("sweeping 100 Hz → 4 kHz…"); sweep(seconds: 5) }
     if !args.isEmpty {
