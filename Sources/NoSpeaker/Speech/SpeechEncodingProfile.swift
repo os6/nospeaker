@@ -5,6 +5,7 @@ import Foundation
 struct SpeechEncodingProfile {
     let envelopeExponent: Double
     let secondFormantGain: Double
+    let maximumPulseEdgeReduction: Double
 }
 
 extension SpeechLanguage {
@@ -14,14 +15,16 @@ extension SpeechLanguage {
             // Keep the original English audio-to-haptic behavior.
             SpeechEncodingProfile(
                 envelopeExponent: 0.45,
-                secondFormantGain: 1.8
+                secondFormantGain: 1.8,
+                maximumPulseEdgeReduction: 0
             )
         case .hungarian:
-            // Preserve Tünde's LPC cues while reducing exaggerated
-            // low-level pulses while preserving consonant information.
+            // Preserve Tünde's LPC cues and consonant information;
+            // reduce exaggerated quiet levels and modeled pulse-edge clicks.
             SpeechEncodingProfile(
                 envelopeExponent: 0.58,
-                secondFormantGain: 1.3
+                secondFormantGain: 1.3,
+                maximumPulseEdgeReduction: 0.35
             )
         }
     }

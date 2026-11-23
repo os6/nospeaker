@@ -113,6 +113,61 @@ needed before claiming elimination of feedback or metallic timbre.
 The speaker preview is useful for detecting digital artifacts but does
 not calibrate the mechanical output.
 
+## Voiced pulse-edge ringing investigation (23 November 2026)
+
+After the user reported that LPC trackpad speech was clearer, but still
+chimed like a science-fiction robot, four utterances were measured frame
+by frame. The LPC model had 41 changes of over 500 Hz in F2, spread across
+multi-frame trajectories instead of isolated one-frame spikes. Stronger and
+milder F2 smoothing were both rejected because ASR intelligibility worsened.
+
+Speaker waveform analysis separated voiced and unvoiced parts. The baseline
+16.248-second preview had 2,738 motor events, 2,306 voiced and 432 unvoiced.
+All 307 adjacent-sample jumps exceeding 0.13 in normalized amplitude
+coincided with the start of a voiced motor event. Fricative bursts were not
+the primary source of these severe modeled clicks.
+
+In short-duration sine bursts the carrier starts at zero phase but the
+preceding burst can finish with nonzero amplitude. Research on sinusoidal
+speech recommends phase continuity and smooth amplitude ramps. However,
+the private trackpad API has no verified portable phase/envelope parameter.
+Rounding carrier frequencies to integer cycles had already degraded ASR
+quality, so that approach was not reused.
+
+SpeechPulseEdgeGain estimates the normalized combined sine level at the end
+of each voiced pulse and applies bounded gain reduction above a modelled
+residual threshold of 0.30. Maximum Hungarian gain reduction is 35%; English
+reduction is 0%, both controlled centrally in the encoding profile.
+The original tone frequencies, weights, pitch and pulse durations are
+unchanged; unvoiced consonants are unchanged.
+
+For the same 16.248-second speaker-preview model:
+
+| Measurement | Prior LPC | New voiced pulse gain |
+| --- | ---: | ---: |
+| Adjacent sample jumps above 0.09 | 1,182 | 768 |
+| Severe jumps above 0.13 | 307 | 14 |
+| Signal RMS | 0.07403 | 0.06507 |
+| High-pass above 3 kHz RMS | 0.01137 | 0.01027 |
+
+The largest jumps fell by about 95.4%. The total output level also fell,
+so this is attenuation of modeled boundary clicks, not evidence of
+physical phase continuity. No microphone measurements were performed.
+
+The 35% candidate had a 36.9% WER / 12.4% CER on the long passage over
+three ASR runs, compared with 36.8% WER / 12.9% CER for the previous
+five-run baseline. The sibilant WER stayed 42.1% in two runs each; the
+palatal WER changed from 41.2% to 35.3%. ASR results are stochastic and
+these small samples are not proof of human intelligibility improvements.
+
+References:
+- McAulay and Quatieri, sinusoidal tracking and phase continuity:
+  https://www.ll.mit.edu/r-d/publications/speech-analysissynthesis-based-sinusoidal-representation
+- Hillenbrand and colleagues, sinewave speech and ramping:
+  https://pmc.ncbi.nlm.nih.gov/articles/PMC3135151/
+- SOF Tone Generator, phase reset and anti-click envelopes:
+  https://thesofproject.github.io/latest/developer_guides/firmware/tone.html
+
 ## Reproducible, motor-free evaluation
 
     ./build.sh

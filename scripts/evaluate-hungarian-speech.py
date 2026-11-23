@@ -97,6 +97,9 @@ def signal_metrics(path):
         "large_sample_jumps_over_0_09": sum(
             abs(a - b) > 0.09 for a, b in zip(normal, normal[1:])
         ),
+        "severe_sample_jumps_over_0_13": sum(
+            abs(a - b) > 0.13 for a, b in zip(normal, normal[1:])
+        ),
     }
 
 

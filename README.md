@@ -85,6 +85,14 @@ electronic pulses. English keeps the original analysis and volume profile.
 All acoustic settings are centralized in SpeechEncodingProfile.swift.
 The shared speech pulse-rate limit is unchanged at 70–250 Hz.
 
+The Hungarian codec also reduces the level of voiced pulses only when
+their two sine carriers would otherwise end at a large nonzero value in
+the motor-command simulation. The maximum per-pulse reduction is 35%.
+This leaves carrier frequencies, phonetic transitions, pitch, the pulse
+schedule and unvoiced consonants unchanged. English receives no such
+correction. The correction mitigates modeled waveform clicks; real
+trackpad acoustics require separate listening or microphone validation.
+
 The experimental Hungarian spectral vocoder and its filters were removed
 after quantitative listening and speech-recognition comparisons showed
 poorer intelligibility. See docs/hungarian-speech-research.md.

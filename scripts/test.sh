@@ -28,6 +28,7 @@ swiftc Sources/NoSpeaker/Core/SpeechActuationLimits.swift \
 
 swiftc Sources/NoSpeaker/Speech/SpeechLanguage.swift \
     Sources/NoSpeaker/Speech/SpeechEncodingProfile.swift \
+    Sources/NoSpeaker/Speech/SpeechPulseEdgeGain.swift \
     Sources/NoSpeaker/Core/SpeechActuationLimits.swift \
     Sources/NoSpeaker/Speech/LinearPrediction.swift \
     Sources/NoSpeaker/Speech/SpeechAnalysis.swift \

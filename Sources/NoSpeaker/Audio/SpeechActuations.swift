@@ -18,12 +18,17 @@ func actuationForSpeechFrame(_ frame: SpeechFrame) -> SpeechActuation? {
     guard frame.level > 0 else { return nil }
     let profile = speechLanguage.encodingProfile
     if frame.voiced {
+        let tones = formantTones(
+            frame, secondFormantGain: profile.secondFormantGain
+        )
+        let duration = 1 / SpeechActuationLimits.cappedPulseRate(frame.f0)
         return SpeechActuation(
-            tones: formantTones(
-                frame, secondFormantGain: profile.secondFormantGain
+            tones: tones,
+            durationSeconds: duration,
+            level: SpeechPulseEdgeGain.adjusted(
+                level: frame.level, tones: tones, duration: duration,
+                maximumReduction: profile.maximumPulseEdgeReduction
             ),
-            durationSeconds: 1 / SpeechActuationLimits.cappedPulseRate(frame.f0),
-            level: frame.level,
             isVoiced: true,
             pitchHz: frame.f0,
             firstFormantHz: frame.formants[0],

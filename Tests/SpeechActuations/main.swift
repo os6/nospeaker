@@ -22,10 +22,12 @@ func verify(_ condition: @autoclosure () -> Bool, _ message: String) {
 }
 
 verify(SpeechLanguage.english.encodingProfile.envelopeExponent == 0.45 &&
-       SpeechLanguage.english.encodingProfile.secondFormantGain == 1.8,
+       SpeechLanguage.english.encodingProfile.secondFormantGain == 1.8 &&
+       SpeechLanguage.english.encodingProfile.maximumPulseEdgeReduction == 0,
        "English codec must preserve all original acoustic settings")
 verify(SpeechLanguage.hungarian.encodingProfile.envelopeExponent == 0.58 &&
-       SpeechLanguage.hungarian.encodingProfile.secondFormantGain == 1.3,
+       SpeechLanguage.hungarian.encodingProfile.secondFormantGain == 1.3 &&
+       SpeechLanguage.hungarian.encodingProfile.maximumPulseEdgeReduction == 0.35,
        "Hungarian codec must use the one central acoustic profile")
 var frame = SpeechFrame()
 frame.voiced = true
@@ -43,8 +45,24 @@ verify(hungarianVowel.tones[1].amp < englishVowel.tones[1].amp &&
        "Hungarian must favor the first formant without losing F2")
 verify(hungarianVowel.tones.count == 2 &&
        hungarianVowel.durationSeconds == englishVowel.durationSeconds &&
-       hungarianVowel.level == englishVowel.level,
+       hungarianVowel.level <= englishVowel.level &&
+       hungarianVowel.level >= englishVowel.level * 0.65,
        "Hungarian vowel motor rate and absolute level stay unchanged")
+
+let stable = SpeechPulseEdgeGain.adjusted(
+    level: 0.8, tones: [(hz: 2000, amp: 1)], duration: 0.005,
+    maximumReduction: 0.35
+)
+let unstable = SpeechPulseEdgeGain.adjusted(
+    level: 0.8, tones: [(hz: 2050, amp: 1)], duration: 0.005,
+    maximumReduction: 0.35
+)
+verify(abs(stable - 0.8) < 1e-6 && unstable < 0.8 && unstable >= 0.52,
+       "high-edge pulses should be limited without changing clean ones")
+verify(SpeechPulseEdgeGain.adjusted(
+    level: 0.8, tones: [(hz: 2050, amp: 1)], duration: 0.005,
+    maximumReduction: 0
+) == 0.8, "English gain correction is disabled")
 
 frame.f0 = 350
 verify(abs(actuationForSpeechFrame(frame)!.durationSeconds - 0.004) < 1e-9,
