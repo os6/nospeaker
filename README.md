@@ -58,6 +58,127 @@ cd nospeaker
 ./nospeaker
 ```
 
+## macOS app
+
+The native macOS app provides text entry, English and Hungarian speech, a
+trackpad or speaker output option, playback controls and word highlighting.
+It uses the same speech engine as the CLI.
+
+Build it with Xcode:
+
+~~~sh
+./scripts/build-app.sh
+open build/MacApp/Build/Products/Release/NoSpeaker.app
+~~~
+
+The app supports macOS 13 and later. The language and appearance settings
+default to the system configuration and are saved between launches.
+Add interface translations to MacApp/Resources/Localizable.xcstrings
+and register new languages in InterfaceLanguage.
+
+The output switch is a native NSSegmentedControl. The language menu uses
+the standard SwiftUI menu style. Glass rendering and animations are handled
+by macOS where available. Closing the last window exits the app and stops
+playback.
+
+Run tests without activating the trackpad:
+
+~~~sh
+./scripts/test.sh
+python3 scripts/test-word-events.py
+~~~
+
+## Language / Nyelv
+
+English remains the default (using the original macOS default voice). Hungarian
+is optional (Tünde) using the
+macOS built-in voices; download Tünde in macOS voice settings if it is missing.
+
+```sh
+./nospeaker "hello there"          # English (default)
+./nospeaker --lang hu "Szia!"      # Hungarian
+./nospeaker --lang en "Hello!"     # English (explicit)
+./nospeaker --lang hu             # complete Hungarian demo
+```
+
+`--voice <name>` still overrides the system voice for either language. The
+interactive text entry accepts Hungarian accented characters, including ő and ű.
+
+**macOS Unicode voice fix:** Foundation's Process passes accented voice
+names to say using decomposed Unicode; the displayed name Tünde silently
+selected the default English voice on this Mac. NoSpeaker now resolves it
+through its ASCII Apple voice identifier. Both languages now use the
+**same tested LPC/formant encoder**, retaining Tünde's Hungarian
+pronunciation. Hungarian uses a slightly lower upper-formant gain and a less
+compressed RMS envelope so weak speech frames do not trigger excessive
+electronic pulses. English keeps the original analysis and volume profile.
+All acoustic settings are centralized in SpeechEncodingProfile.swift.
+The shared speech pulse-rate limit is unchanged at 70–250 Hz.
+
+The Hungarian codec also reduces the level of voiced pulses only when
+their two sine carriers would otherwise end at a large nonzero value in
+the motor-command simulation. The maximum per-pulse reduction is 35%.
+This leaves carrier frequencies, phonetic transitions, pitch, the pulse
+schedule and unvoiced consonants unchanged. English receives no such
+correction. The correction mitigates modeled waveform clicks; real
+trackpad acoustics require separate listening or microphone validation.
+
+The experimental Hungarian spectral vocoder and its filters were removed
+after quantitative listening and speech-recognition comparisons showed
+poorer intelligibility. See docs/hungarian-speech-research.md.
+
+The optional Hungarian phoneme inventory identifies gy (/ɟ/), ty (/c/),
+sz (/s/), cs (/t͡ʃ/), dzs (/d͡ʒ/) and long digraph spellings for inspection.
+This spelling-to-IPA inventory is **not** a complete G2P system and does not
+replace Tünde's pronunciation or time-align phonemes to the waveform:
+
+```sh
+./nospeaker --lang hu --phonemes "Hogy vagy?"
+# Hungarian phoneme inventory (approximate IPA): /hoɟ vɒɟ/
+```
+
+Intelligibility is limited by the physical trackpad and sine-wave speech
+representation: voiced speech is reduced to two formant tones and unvoiced
+speech to short high-tone bursts. This cannot preserve every component of a
+natural human voice; some metallic coloration may remain. Motor playback
+must be evaluated by listening, not assumed clean from synthetic tests.
+
+Speech pulse rate is controlled by one global shared safety policy:
+`SpeechActuationLimits` (70–250 Hz) for English and Hungarian.
+The 250 Hz upper bound controls the repetition rate of voiced pulses, not
+the acoustic frequencies of the sine-tone components (which can exceed
+250 Hz in the original English algorithm). The English acoustic processing
+and its existing motor tone frequencies remain unchanged.
+
+## Test without actuating the trackpad
+
+The program can render its haptic sine-tone commands to a regular speaker as
+an **approximation**. This previews the frequencies, timing and relative
+amplitudes sent to the motor, but does **not** reproduce the physical
+trackpad's mechanical response. The preview mode does not open or activate
+the trackpad motor.
+
+```sh
+./nospeaker --lang hu --preview "Hogy vagy?"
+./nospeaker --lang en --preview "How are you?"
+./nospeaker --lang hu --preview-wav hungarian.wav "Hogy vagy?"
+```
+
+Playback is capped at 20 seconds of synthesized speech per preview, with a
+conservative waveform level. WAV export supports repeatable offline testing.
+
+An optional offline evaluator uses an installed Hungarian Whisper model
+to compare the reconstructed motor-preview speech against Tünde's original:
+
+    python3 scripts/evaluate-hungarian-speech.py --runs 3
+    python3 scripts/evaluate-hungarian-speech.py --sample sibilants --runs 3
+    python3 scripts/evaluate-hungarian-speech.py --sample palatal --runs 3
+
+This requires whisper.cpp, its Hungarian model, and ffmpeg already installed.
+It never activates the trackpad or uploads any audio. ASR word and character
+errors are only proxies for intelligibility, not listening test results.
+
+
 ## 03 / play with it
 
 ```text
@@ -118,7 +239,8 @@ is over a quiet room, and how much of the sound is the note itself.
       131         262         523         1047        2093    3951
    public notes stop at 600 Hz ─┘
 
-across: every semitone, in Hz · up: loudness, +16 to +34 dB
+horizontal: frequency (Hz)
+vertical: loudness (+16 to +34 dB)
 # clean note   + fair   . mostly buzz
 ```
 
@@ -134,7 +256,9 @@ because the motor's strength is split fewer ways.
 It sounds robotic, and it's much easier to follow when you can read along, which is why the show types every
 line as it speaks.
 
-**The code.** One Swift file, [nospeaker.swift](nospeaker.swift), with no dependencies.
+**The code.** The dependency-free Swift sources are organized under
+[Sources/NoSpeaker](Sources/NoSpeaker) by responsibility: Audio, Core,
+Haptics, Interface, Show, and Speech. build.sh compiles them into one executable.
 
 ## 06 / caveats
 
@@ -149,4 +273,5 @@ measured on a MacBook.
 ──────────────────────  thanks for listening  ───────────────────────
 ```
 
-Made by [Cody Collier](https://x.com/codycollier) · [a90.com](https://a90.com) · [MIT license](LICENSE)
+Created by [Cody Collier](https://x.com/codycollier) at [a90.com](https://a90.com).
+Licensed under the [MIT license](LICENSE).

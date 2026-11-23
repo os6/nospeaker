@@ -1,0 +1,45 @@
+name: NoSpeaker
+options:
+  bundleIdPrefix: hu.nospeaker
+  developmentLanguage: en
+  deploymentTarget:
+    macOS: "13.0"
+  groupSortPosition: top
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    GENERATE_INFOPLIST_FILE: YES
+    INFOPLIST_KEY_CFBundleDisplayName: NoSpeaker
+    INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+    INFOPLIST_KEY_NSHumanReadableCopyright: "NoSpeaker"
+    CODE_SIGNING_ALLOWED: NO
+    ENABLE_APP_SANDBOX: NO
+targets:
+  NoSpeaker:
+    type: application
+    platform: macOS
+    sources:
+      - path: MacApp/Sources
+      - path: MacApp/Assets.xcassets
+      - path: MacApp/Resources
+    postBuildScripts:
+      - name: Embed NoSpeaker motor
+        basedOnDependencyAnalysis: false
+        script: |
+          set -eu
+          motor="$SRCROOT/nospeaker"
+          if [ ! -x "$motor" ]; then
+              echo "error: Build the motor with ./build.sh first." >&2
+              exit 1
+          fi
+          folder="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
+          mkdir -p "$folder"
+          cp "$motor" "$folder/nospeaker"
+          chmod 755 "$folder/nospeaker"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: hu.nospeaker.mac
+        PRODUCT_NAME: NoSpeaker
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_EMIT_LOC_STRINGS: YES
