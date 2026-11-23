@@ -69,6 +69,50 @@ cd nospeaker
 --plain                              no visuals, plain text
 ```
 
+`[ music ]`
+
+```text
+./nospeaker --song "billie eilish bad guy"   find a song, play its 30-second preview
+./nospeaker --file ~/Music/song.mp3          play any audio file, whole
+./nospeaker --sound jingle                   a tune: jingle, birthday, sing, sparkle,
+                                             heartbeat, sweep
+
+--country kz        which iTunes store to search (default us)
+--octave 1          move the whole song up 1 or 2 octaves
+--floor 400         lift notes below this many Hz up by octaves (default 400, 0 = off)
+--volume 50         0 to 100, never past the motor's normal maximum
+```
+
+Songs come from Apple's public iTunes Search API, which only gives 30-second previews. Files can be mp3, m4a,
+wav, aiff or flac; songs with DRM (Apple Music downloads) can't be read. Every 10 ms an FFT finds the song's two
+strongest notes in the motor's range, and sudden low-end hits (kicks) become a short pitch-dive thump. Notes
+under 400 Hz are quiet on the motor and blur together, so they're moved up by whole octaves: the same note,
+higher, and the melody stays recognisable.
+
+`[ web panel ]`
+
+```sh
+./nospeaker --web                    # opens http://127.0.0.1:4747 (--port 4848, --no-open)
+```
+
+One page for everything: search and play songs, drop in a file, type a line to say, play the show's sounds,
+stop, volume and pitch. The **Instrument** tab plays until you stop it and draws your trackpad at its real
+shape as a heatmap: where each finger is, and how hard (contact size) by colour. Only this Mac can open the
+panel, and other websites can't drive the motor through it.
+
+`[ sparkle ]`
+
+```sh
+./sparkle 50                         # the show's closing sparkle alone, at 50%
+```
+
+A tiny separate program (`sparkle.swift`, built by `./build.sh`) for "done" sounds. It exits with 1 when
+there's no Force Touch trackpad, so it can fall back to a normal sound, e.g. as a Claude Code `Stop` hook:
+
+```sh
+sparkle 50 || afplay /System/Library/Sounds/Glass.aiff
+```
+
 ## 04 / needs
 
 A Force Touch trackpad (built into MacBooks from 2015 on, or a Magic Trackpad 2 or newer), and macOS 12 or

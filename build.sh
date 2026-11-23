@@ -43,6 +43,13 @@ codesign -s - -f build/nospeaker 2>/dev/null
 mv -f build/nospeaker nospeaker     # a rename, so a copy that's already running isn't disturbed
 echo "built ./nospeaker ($(lipo -archs nospeaker)). Run it with: ./nospeaker"
 
+# sparkle: the show's closing sound alone, a tiny program for "done" sounds (see sparkle.swift).
+swiftc -O -target arm64-apple-macos12 sparkle.swift -o build/sparkle-arm64 \
+    && swiftc -O -target x86_64-apple-macos13 sparkle.swift -o build/sparkle-x86_64 \
+    && lipo -create build/sparkle-arm64 build/sparkle-x86_64 -output build/sparkle \
+    && codesign -s - -f build/sparkle 2>/dev/null && mv -f build/sparkle sparkle \
+    && echo "built ./sparkle too. Try: ./sparkle 50"
+
 [ "$mode" = "release" ] || exit 0
 
 # Release: Developer ID signature (with the hardened runtime Apple requires), then notarization.
