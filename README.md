@@ -68,7 +68,13 @@ cd nospeaker
 --dark                               white on black
 --plain                              no visuals, plain text
 --external                           play through an external Magic Trackpad
+--lights                             the keyboard backlight, Caps Lock light and screen play along
 ```
+
+With `--lights` the screen goes dark after the opening and only flickers slowly, about once a bar, so the
+keyboard is the thing to watch. Everything goes back as it was at the end, after Ctrl-C too. The Caps Lock light
+may need Input Monitoring for your terminal app (System Settings > Privacy & Security); without it, the rest
+plays anyway.
 
 ## 04 / needs
 
