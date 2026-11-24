@@ -68,6 +68,7 @@ cd nospeaker
 --dark                               white on black
 --plain                              no visuals, plain text
 --external                           play through an external Magic Trackpad
+--volume 50                          turn it down: 0 to 100, where 100 (full) is the default
 ```
 
 ## 04 / needs
