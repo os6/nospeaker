@@ -7,7 +7,7 @@
 //   nospeaker                      the show: about a minute and a half, in the terminal
 //   nospeaker "any words"          say something
 //   nospeaker --sweep              a rising tone from 100 Hz to 4 kHz
-//   options                        --voice <name> (any voice from `say -v '?'`), --dark, --plain, --external
+//   options                        --voice <name> (any voice from `say -v '?'`), --dark, --plain, --external, --transpose <semitones>
 //
 // How it talks: macOS's own voice (`say`) speaks the line into memory. Every 10 ms, linear prediction finds
 // the voice's two strongest resonances (formants), its loudness and its pitch. The motor plays those two
@@ -105,6 +105,8 @@ var motorBuiltIn = false
 var deviceList: CFArray?
 /// --external: play through an external Magic Trackpad instead of the built-in trackpad.
 var preferExternal = false
+/// --transpose: a multiplier on every tone's frequency.
+var toneShift = 1.0
 
 /// The Mac's model identifier, like "MacBookPro18,3" or "Mac14,3".
 func macModel() -> String {
@@ -183,12 +185,12 @@ func play(_ tones: [(hz: Double, amp: Double)], ms: Double, level: Float) {
     let sum = max(tones.reduce(0) { $0 + $1.amp }, 0.0001)
     let shape: [String: Any] = [
         "BaseWaveform": ["Type": "Gaussian", "Amplitude": 0.0, "DurationMS": ms],
-        "Tones": tones.map { ["Type": "Sine", "Amplitude": $0.amp / sum, "DurationMS": ms, "DelayMS": 0.0, "FrequencykHz": $0.hz / 1000] },
+        "Tones": tones.map { ["Type": "Sine", "Amplitude": $0.amp / sum, "DurationMS": ms, "DelayMS": 0.0, "FrequencykHz": $0.hz * toneShift / 1000] },
     ]
     guard let act = actuationCreate!(shape as CFDictionary, 0) else { return }
     _ = actuationPlay!(act, motorPointer, 0, min(1, max(0, level)), 0)
     Unmanaged<AnyObject>.fromOpaque(act).release()
-    let first = tones[0].hz
+    let first = tones[0].hz * toneShift
     live {
         $0.actuations += 1; $0.hz = first; $0.level = Double(level); $0.lastPlay = now()
     }
@@ -1540,6 +1542,12 @@ func option(_ flag: String, example: String) -> String? {
     let v = args[i + 1]; args.removeSubrange(i...(i + 1)); return v
 }
 func flag(_ f: String) -> Bool { if let i = args.firstIndex(of: f) { args.remove(at: i); return true }; return false }
+/// The number after `flag` (and removes both), or nil if the flag isn't there. Allows negatives.
+func numOption(_ flag: String, example: String) -> Double? {
+    guard let i = args.firstIndex(of: flag) else { return nil }
+    guard i + 1 < args.count, let v = Double(args[i + 1]) else { usageError("\(flag) needs a number, like: \(flag) \(example)") }
+    args.removeSubrange(i...(i + 1)); return v
+}
 
 if flag("--help") || flag("-h") {
     print("""
@@ -1553,6 +1561,7 @@ if flag("--help") || flag("-h") {
       --dark                            white on black instead of black on white
       --plain                           no visuals
       --external                        play through an external Magic Trackpad
+      --transpose -2                    retune every tone, in semitones (default -2 with --external)
 
     Mute your Mac: it still talks. Put it on a table, and keep your hands off the trackpad until it asks.
     a90.com · x.com/codycollier
@@ -1568,6 +1577,7 @@ applyTheme(light: !flag("--dark"))
 let plain = flag("--plain")
 let wantsSweep = flag("--sweep")
 preferExternal = flag("--external")
+toneShift = pow(2.0, (numOption("--transpose", example: "-2") ?? (preferExternal ? -2 : 0)) / 12)
 if let unknown = args.first(where: { $0.hasPrefix("-") }) { usageError("\"\(unknown)\" isn't an option.") }
 
 signal(SIGINT) { _ in requestEnd() }

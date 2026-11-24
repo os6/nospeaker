@@ -68,6 +68,7 @@ cd nospeaker
 --dark                               white on black
 --plain                              no visuals, plain text
 --external                           play through an external Magic Trackpad
+--transpose -2                       retune every tone by semitones (with --external, -2 is the default)
 ```
 
 ## 04 / needs
