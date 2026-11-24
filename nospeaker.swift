@@ -7,7 +7,8 @@
 //   nospeaker                      the show: about a minute and a half, in the terminal
 //   nospeaker "any words"          say something
 //   nospeaker --sweep              a rising tone from 100 Hz to 4 kHz
-//   options                        --voice <name> (any voice from `say -v '?'`), --dark, --plain, --external
+//   options                        --voice <name> (any voice from `say -v '?'`), --dark, --plain, --external,
+//                                  --lights (the keyboard backlight, Caps Lock light and screen play along)
 //
 // How it talks: macOS's own voice (`say`) speaks the line into memory. Every 10 ms, linear prediction finds
 // the voice's two strongest resonances (formants), its loudness and its pitch. The motor plays those two
@@ -15,12 +16,15 @@
 // from about 100 Hz to 4 kHz, which covers the most important part of speech.
 //
 // Private API: MultitouchSupport is undocumented and may change with any macOS update. The motor is never
-// driven past its normal maximum.
+// driven past its normal maximum. --lights adds two more private frameworks, CoreBrightness (the keyboard
+// backlight) and DisplayServices (the screen's brightness), also resolved at run time; the sound doesn't change.
 
 import AVFoundation
 import CoreAudio
 import Darwin
 import IOKit
+import IOKit.hid
+import CoreGraphics
 import Foundation
 
 // MARK: - Run state, keys, clock
@@ -499,6 +503,344 @@ func enter(_ scene: Scene, _ part: Int, _ name: String) {
 }
 func caption(_ text: String, seconds: Double) { live { $0.caption = text; $0.captionStart = now(); $0.captionDur = seconds } }
 
+// MARK: - Lights (--lights): the keyboard backlight, the Caps Lock light and the screen play along
+
+/// What the music tells the lights, sent by the sound loops as it happens. A cue says what's in the music (a beat,
+/// a note, a syllable), not which part of the show is on, so anything that makes sound can drive the lights.
+enum LightCue {
+    /// A beat (a kick, a heartbeat): the keyboard jumps to this strength (0…1), then fades.
+    case beat(Double)
+    /// A note of the tune that sounds for `seconds`: a keyboard pulse, and Caps Lock on while it sounds.
+    case note(seconds: Double, strength: Double)
+    /// The note still sounds (one whose length isn't known ahead): Caps Lock stays on this much longer.
+    case held(seconds: Double)
+    /// A small hit (a snare, a hi-hat): Caps Lock blinks.
+    case tick
+    /// A syllable starts: a keyboard pulse of this strength, and a Caps Lock blink.
+    case syllable(Double)
+    /// The pitch now, 0 (low) to 1 (high): the keyboard's brightness follows it for as long as these keep coming.
+    case pitch(Double)
+    /// What the screen does from now on.
+    case screen(ScreenCue)
+}
+
+/// The screen sets the stage and then steps back, so the keyboard stays the thing to watch (a bright screen drowns
+/// its light). All of it is slow on purpose: at most one faded flicker a beat, never a strobe, since fast flashing
+/// can trigger seizures in people with photosensitive epilepsy.
+enum ScreenCue {
+    /// Back to the brightness it had before the show, eased over 0.6 s.
+    case rest
+    /// Dark: the display's backlight off.
+    case dark
+    /// A hard cut to full brightness for `seconds`, then dark.
+    case full(seconds: Double)
+    /// Up to `peak` (0…1) at once, then a fade that reaches dark by itself after `seconds`.
+    case flicker(peak: Double, seconds: Double)
+}
+
+/// The latest cues, written by `lightCue` and read by the light threads.
+struct LightState {
+    var pulseAt = -9.0, pulse = 0.0            // the last keyboard pulse, and how strong
+    var pitchAt = -9.0, pitch = 0.0            // the last pitch
+    var capsFrom = -9.0, capsUntil = -9.0      // Caps Lock is on between these
+    var screen = ScreenCue.rest, screenAt = -9.0
+}
+let lightLock = NSLock()
+var lightState = LightState()
+var lightsRunning = false
+/// The running light threads: each enters on start and leaves when its loop ends.
+let lightThreads = DispatchGroup()
+
+/// Sends a cue to the lights. Called from the sound loops, so it only notes the time; the light threads do the
+/// slow part. Without --lights it does nothing.
+func lightCue(_ cue: LightCue) {
+    guard lightsRunning else { return }
+    let t = now()
+    lightLock.lock(); defer { lightLock.unlock() }
+    func pulse(_ s: Double) {
+        if t - lightState.pulseAt > 0.02 || s > lightState.pulse { lightState.pulse = s }
+        lightState.pulseAt = t
+    }
+    func caps(for seconds: Double) {
+        // A note right after one that's still lit goes dark briefly first, so repeated notes show as blinks.
+        let gap = t < lightState.capsUntil + 0.04 ? min(0.04, seconds / 3) : 0
+        lightState.capsFrom = t + gap
+        lightState.capsUntil = t + seconds
+    }
+    switch cue {
+    case .beat(let s): pulse(s)
+    case .note(let seconds, let s): pulse(s); caps(for: seconds)
+    case .held(let seconds): lightState.capsUntil = max(lightState.capsUntil, t + seconds)
+    case .tick: caps(for: 0.07)
+    case .syllable(let s): pulse(s); caps(for: 0.08)
+    case .pitch(let p): lightState.pitch = p; lightState.pitchAt = t
+    case .screen(let s): lightState.screen = s; lightState.screenAt = t
+    }
+}
+
+/// A tone's place in the motor's range, 100 Hz → 0 to 4 kHz → 1, on a log scale (as the ear hears pitch).
+func tonePitch(_ hz: Double) -> Double { min(1, max(0, log(hz / 100) / log(40))) }
+
+/// Finds where syllables start in speech, one 10 ms frame at a time: the level jumping well above where it's
+/// been lately, or sound after silence. Each frame counts once, however many motor periods it spans.
+struct SyllableFinder {
+    private var slow = 0.0, lastFrame = -1, lastHit = -99
+    mutating func feed(_ level: Float, frame: Int) -> Double? {
+        guard frame != lastFrame else { return nil }
+        lastFrame = frame
+        let l = Double(level)
+        defer { slow += (l - slow) * 0.15 }    // remembers about the last 60 ms
+        guard l > 0.1, l > slow * 1.4 + 0.08, frame - lastHit >= 9 else { return nil }    // at most 11 a second
+        lastHit = frame
+        return l
+    }
+}
+
+/// The keyboard backlight, through KeyboardBrightnessClient: the private CoreBrightness class behind the keyboard
+/// brightness slider in Control Center. Resolved at run time like MultitouchSupport, so nothing is linked, and on a
+/// Mac without it (or a macOS that renamed it) `init` returns nil and the show plays without it.
+final class KeyboardBacklight {
+    private typealias CopyIDs = @convention(c) (AnyObject, Selector) -> Unmanaged<NSArray>?
+    private typealias GetLevel = @convention(c) (AnyObject, Selector, UInt64) -> Float
+    private typealias GetFlag = @convention(c) (AnyObject, Selector, UInt64) -> ObjCBool
+    private typealias SetFlag = @convention(c) (AnyObject, Selector, ObjCBool, UInt64) -> ObjCBool
+    private typealias SetLevel = @convention(c) (AnyObject, Selector, Float, Int32, ObjCBool, UInt64) -> ObjCBool
+
+    let id: UInt64
+    private let client: NSObject
+    private let setLevel: SetLevel
+    private let setSel: Selector
+    // What the keyboard was doing before, put back by `restore()`.
+    private var original: Float = 0.5, wasAuto = false, wasIdleSuspended = false
+    private var began = false
+
+    init?() {
+        guard dlopen("/System/Library/PrivateFrameworks/CoreBrightness.framework/CoreBrightness", RTLD_NOW) != nil,
+              let cls = NSClassFromString("KeyboardBrightnessClient") as? NSObject.Type else { return nil }
+        let c = cls.init()
+        let sel = NSSelectorFromString("setBrightness:fadeSpeed:commit:forKeyboard:")
+        guard c.responds(to: sel) else { return nil }
+        // The built-in keyboard's backlight ID (an external keyboard can have one too).
+        var ids: [UInt64] = []
+        let copySel = NSSelectorFromString("copyKeyboardBacklightIDs")
+        if c.responds(to: copySel),
+           let list = unsafeBitCast(c.method(for: copySel), to: CopyIDs.self)(c, copySel)?.takeRetainedValue() {
+            ids = list.compactMap { ($0 as? NSNumber)?.uint64Value }
+        }
+        guard !ids.isEmpty else { return nil }
+        client = c
+        setSel = sel
+        setLevel = unsafeBitCast(c.method(for: sel), to: SetLevel.self)
+        id = ids.first { KeyboardBacklight.ask(c, "isKeyboardBuiltIn:", $0) ?? false } ?? ids[0]
+    }
+
+    /// Asks a yes/no question about one keyboard, or nil if this macOS doesn't have that method.
+    private static func ask(_ c: NSObject, _ name: String, _ kb: UInt64) -> Bool? {
+        let sel = NSSelectorFromString(name)
+        guard c.responds(to: sel) else { return nil }
+        return unsafeBitCast(c.method(for: sel), to: GetFlag.self)(c, sel, kb).boolValue
+    }
+    private func flag(_ name: String) -> Bool? { KeyboardBacklight.ask(client, name, id) }
+    private func setFlag(_ name: String, _ on: Bool) {
+        let sel = NSSelectorFromString(name)
+        guard client.responds(to: sel) else { return }
+        _ = unsafeBitCast(client.method(for: sel), to: SetFlag.self)(client, sel, ObjCBool(on), id)
+    }
+
+    /// Takes the backlight over: remembers its level, and turns off auto-brightness (the light sensor would fight
+    /// the show) and idle dimming (hands are off the keyboard while it plays). `restore()` puts all three back.
+    func begin() {
+        guard !began else { return }
+        began = true
+        wasAuto = flag("isAutoBrightnessEnabledForKeyboard:") ?? false
+        wasIdleSuspended = flag("isIdleDimmingSuspendedOnKeyboard:") ?? false
+        // Suspending idle dimming first wakes a keyboard that has gone dark from idling, so the level read next is
+        // the real one. Read while dimmed, it's 0, and restoring 0 would leave the keyboard dark.
+        if !wasIdleSuspended { setFlag("suspendIdleDimming:forKeyboard:", true); usleep(150_000) }
+        let sel = NSSelectorFromString("brightnessForKeyboard:")
+        if client.responds(to: sel) { original = unsafeBitCast(client.method(for: sel), to: GetLevel.self)(client, sel, id) }
+        if wasAuto { setFlag("enableAutoBrightness:forKeyboard:", false) }
+    }
+
+    /// Sets the brightness now (0…1), with no fade and without saving it as the user's setting.
+    func set(_ level: Double) {
+        _ = setLevel(client, setSel, Float(min(1, max(0, level))), 0, false, id)
+    }
+
+    /// Puts it back. It never commits a level, so the user's saved brightness is never written.
+    func restore() {
+        guard began else { return }
+        began = false
+        _ = setLevel(client, setSel, original, 0, false, id)
+        usleep(100_000)
+        if !wasIdleSuspended { setFlag("suspendIdleDimming:forKeyboard:", false) }
+        if wasAuto { setFlag("enableAutoBrightness:forKeyboard:", true) }
+    }
+}
+
+/// The Caps Lock key's light, set directly through IOKit HID. Only the light: Caps Lock itself (what you type)
+/// doesn't change, and the light goes back to how it was at the end.
+final class CapsLight {
+    private let manager: IOHIDManager
+    private let device: IOHIDDevice
+    private let led: IOHIDElement
+    private let original: Int
+    private var shown = -1
+
+    /// Nil when there's no keyboard with a Caps Lock light, or macOS won't let this program set it.
+    init?() {
+        manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
+        IOHIDManagerSetDeviceMatching(manager, [kIOHIDDeviceUsagePageKey: kHIDPage_GenericDesktop, kIOHIDDeviceUsageKey: kHIDUsage_GD_Keyboard] as CFDictionary)
+        guard IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone)) == kIOReturnSuccess,
+              let devices = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> else { return nil }
+        // The built-in keyboard first, else any keyboard with a Caps Lock light.
+        func builtIn(_ d: IOHIDDevice) -> Bool { (IOHIDDeviceGetProperty(d, "Built-In" as CFString) as? Bool) ?? false }
+        for d in devices.sorted(by: { builtIn($0) && !builtIn($1) }) {
+            let match = [kIOHIDElementUsagePageKey: kHIDPage_LEDs, kIOHIDElementUsageKey: kHIDUsage_LED_CapsLock] as CFDictionary
+            guard let e = (IOHIDDeviceCopyMatchingElements(d, match, 0) as? [IOHIDElement])?.first else { continue }
+            let placeholder = IOHIDValueCreateWithIntegerValue(kCFAllocatorDefault, e, 0, 0)
+            var value = Unmanaged.passUnretained(placeholder)
+            let ok = withExtendedLifetime(placeholder) { IOHIDDeviceGetValue(d, e, &value) == kIOReturnSuccess }
+            let was = ok ? IOHIDValueGetIntegerValue(value.takeUnretainedValue()) : 0
+            // Asks once, before the show, by setting the light to what it already is: macOS may refuse a program
+            // without Input Monitoring, and during the show there'd be nowhere to say so.
+            let r = IOHIDDeviceSetValue(d, e, IOHIDValueCreateWithIntegerValue(kCFAllocatorDefault, e, mach_absolute_time(), was))
+            guard r == kIOReturnSuccess else { return nil }
+            device = d; led = e; original = was
+            return
+        }
+        return nil
+    }
+    func set(_ on: Bool) {
+        let v = on ? 1 : 0
+        guard v != shown else { return }
+        shown = v
+        _ = IOHIDDeviceSetValue(device, led, IOHIDValueCreateWithIntegerValue(kCFAllocatorDefault, led, mach_absolute_time(), v))
+    }
+    func restore() { shown = -1; set(original != 0) }
+}
+
+/// The MacBook's own, built-in display, even when an external display is the main one (its brightness can't be set
+/// this way, and the trackpad and keyboard are on the MacBook anyway).
+func showDisplay() -> CGDirectDisplayID {
+    var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+    var count: UInt32 = 0
+    CGGetOnlineDisplayList(16, &ids, &count)
+    return ids.prefix(Int(count)).first { CGDisplayIsBuiltin($0) != 0 } ?? CGMainDisplayID()
+}
+
+/// The screen's brightness, moved as the brightness keys move it, through DisplayServices (a private framework,
+/// resolved at run time like the others): the backlight itself dims and brightens, so it stays smooth. (The picture's
+/// gamma steps visibly on some displays, and resetting it resets other apps' gamma too, so it isn't used.)
+/// Nil without DisplayServices; the show then leaves the screen alone.
+final class ScreenLight {
+    private typealias GetBrightness = @convention(c) (UInt32, UnsafeMutablePointer<Float>) -> Int32
+    private typealias SetBrightness = @convention(c) (UInt32, Float) -> Int32
+    private let display = showDisplay()
+    private let put: SetBrightness
+    /// Where the screen was when it started (0…1): it goes back there at the end.
+    let rest: Double
+    private var shown: Double
+
+    init?() {
+        guard let ds = dlopen("/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices", RTLD_NOW),
+              let g = dlsym(ds, "DisplayServicesGetBrightness"), let p = dlsym(ds, "DisplayServicesSetBrightness") else { return nil }
+        var b: Float = 0
+        guard unsafeBitCast(g, to: GetBrightness.self)(display, &b) == 0 else { return nil }
+        put = unsafeBitCast(p, to: SetBrightness.self)
+        rest = min(1, max(0, Double(b)))
+        shown = rest
+    }
+    /// 0…1: dark (the backlight off) to full.
+    func set(_ level: Double) {
+        let l = min(1, max(0, level))
+        guard abs(l - shown) >= 0.002 || (l == 0 && shown != 0) else { return }    // always all the way to 0
+        shown = l
+        _ = put(display, Float(l))
+    }
+    func restore() { shown = rest; _ = put(display, Float(rest)) }
+}
+var backlight: KeyboardBacklight?
+var capsLight: CapsLight?
+var screenLight: ScreenLight?
+
+/// Brightness steps look even to the eye when the level is raised to about this power (the eye is far more
+/// sensitive to changes in the dark).
+let lightGamma = 1.8
+
+/// The lights run on their own threads, apart from the motor's loops: setting the backlight is a message to
+/// corebrightnessd, too slow to send from inside a loop that times the motor to the microsecond.
+func startLights() {
+    guard !lightsRunning, backlight != nil || capsLight != nil || screenLight != nil else { return }
+    backlight?.begin()
+    lightsRunning = true
+    // Keyboard and Caps Lock, 100 times a second. Each sends only real changes, so a steady light costs nothing.
+    let th = Thread {
+        defer { lightThreads.leave() }
+        var pulse = 0.0, seenPulse = -9.0, follow = 0.0, shown = -1.0, last = now()
+        while lightsRunning {
+            let t = now(), dt = t - last
+            last = t
+            lightLock.lock(); let s = lightState; lightLock.unlock()
+            // Pulses jump to their strength, then fade out over ~150 ms.
+            if s.pulseAt != seenPulse { seenPulse = s.pulseAt; pulse = max(pulse, s.pulse) }
+            pulse *= exp(-dt / 0.15)
+            // Pitch, while it's being sent: from a dim floor up, rising fast and falling a little slower.
+            let target = t - s.pitchAt < 0.08 ? 0.15 + 0.85 * s.pitch : 0
+            follow += (target - follow) * (1 - exp(-dt / (target > follow ? 0.03 : 0.12)))
+            let b = pow(min(1, max(pulse, follow)), lightGamma)
+            if let bl = backlight, abs(b - shown) >= 0.015 || (b < 0.01 && shown >= 0.01) || (b == 1 && shown != 1) { bl.set(b); shown = b }
+            capsLight?.set(t >= s.capsFrom && t < s.capsUntil)
+            usleep(10_000)
+        }
+    }
+    th.qualityOfService = .userInteractive
+    lightThreads.enter()
+    th.start()
+    // The screen on a thread of its own, 60 times a second, so nothing else can make it stutter.
+    guard let sc = screenLight else { return }
+    let st = Thread {
+        defer { lightThreads.leave() }
+        var level = sc.rest, easeFrom = sc.rest, seenCue = -9.0
+        while lightsRunning {
+            let t = now()
+            lightLock.lock(); let cue = lightState.screen, at = lightState.screenAt; lightLock.unlock()
+            if at != seenCue { seenCue = at; easeFrom = level }
+            let age = t - at
+            switch cue {
+            case .rest:
+                let k = min(1, max(0, age / 0.6))
+                level = easeFrom + (sc.rest - easeFrom) * k * k * (3 - 2 * k)    // smoothstep: eases in and out
+            case .dark:
+                level = 0
+            case .full(let seconds):
+                level = age < seconds ? 1 : 0
+            case .flicker(let peak, let seconds):
+                // Up in 30 ms, then quick at first and gentle at the end, so there's nothing left to cut at 0.
+                level = age < 0.03 ? peak * age / 0.03 : peak * pow(max(0, 1 - (age - 0.03) / max(0.01, seconds - 0.03)), 2)
+            }
+            sc.set(level)
+            usleep(16_000)
+        }
+    }
+    st.qualityOfService = .userInteractive
+    lightThreads.enter()
+    st.start()
+}
+
+/// Puts every light back as it was. The screen first eases back to its own brightness (unless it's ending in a
+/// hurry), then the threads stop, and only once they really have does each light go back: a thread caught in the
+/// middle of a slow call could otherwise land its last write after the restore and undo it.
+func stopLights() {
+    guard lightsRunning else { return }
+    if screenLight != nil && !stopRequested { lightCue(.screen(.rest)); usleep(650_000) }
+    lightsRunning = false
+    _ = lightThreads.wait(timeout: .now() + 1)
+    backlight?.restore()
+    capsLight?.restore()
+    screenLight?.restore()
+}
+
 // MARK: - Notes
 
 func hz(_ note: String) -> Double {
@@ -523,8 +865,11 @@ func thump(_ amp: Double) {
 }
 
 func heartbeat() {
-    for _ in 0..<2 where !interrupted() {
-        thump(1); pause(0.17); thump(0.7); pause(0.75)
+    for i in 0..<2 where !interrupted() {
+        // The first sound of the show: the screen cuts to full for a beat, then goes dark; the next beat only glows.
+        lightCue(.screen(i == 0 ? .full(seconds: 0.6) : .flicker(peak: 0.25, seconds: 0.5)))
+        lightCue(.note(seconds: 0.12, strength: 1)); thump(1); pause(0.17)
+        lightCue(.note(seconds: 0.12, strength: 0.7)); thump(0.7); pause(0.75)
     }
 }
 
@@ -535,6 +880,7 @@ func sweep(seconds: Double = 6) {
         let f = 100 * pow(40, t / seconds)
         let seg = max(1, (0.02 * f).rounded()) / f
         play([(f, 1)], ms: seg * 1000, level: 1)
+        lightCue(.pitch(tonePitch(f)))
         t += seg
         waitUntil(start + UInt64(t * ticksPerSecond))
     }
@@ -546,8 +892,11 @@ func talk(_ frames: [Frame], text: String) {
     caption(text, seconds: total)
     let start = mach_absolute_time()
     var t = 0.0
+    var syllables = SyllableFinder()
     while t < total && !interrupted() {
-        let f = frames[min(frames.count - 1, Int(t / hop))]
+        let i = min(frames.count - 1, Int(t / hop))
+        let f = frames[i]
+        if let s = syllables.feed(f.level, frame: i) { lightCue(.syllable(s)) }
         var step = 0.005
         if f.level > 0 {
             if f.voiced {
@@ -581,6 +930,8 @@ func sing() {
         let target = hz(name), length = beats * beat
         let sounding = phraseEnds.contains(i) ? length * 0.86 : length
         live { $0.noteRow = rollNotes.firstIndex(of: name) ?? -1; $0.noteName = name }
+        if i == 0 || phraseEnds.contains(i - 1) { lightCue(.screen(.flicker(peak: 0.45, seconds: beat))) }    // a phrase starts
+        lightCue(.note(seconds: sounding, strength: 1))
         let from = previous
         while t < at + sounding && !interrupted() {
             let age = t - at
@@ -622,8 +973,15 @@ func groove(bars: Int, rapBar: Int, rap: [Frame], rapText: String) {
     live { $0.bpm = bpm; $0.bars = bars }
     let rapStart = Double(rapBar) * barLen
     let end = Double(bars) * barLen
+    /// True while the rapped voice sounds at `t` (the hi-hats drop out then).
+    func rapIsTalking(at t: Double) -> Bool {
+        guard t >= rapStart else { return false }
+        let idx = Int((t - rapStart) / hop)
+        return idx < rap.count && rap[idx].level > 0
+    }
     var t = 0.0, next = 0, rapping = false
     var ringing: [Hit] = []
+    var litBar = -1
     let start = mach_absolute_time()
     while t < end && !stopRequested {
         if (skipRequested && !rapping) || jumpToCredits { break }
@@ -632,10 +990,14 @@ func groove(bars: Int, rapBar: Int, rap: [Frame], rapText: String) {
             ringing.append(h)
             let when = now()
             live { if h.kind == 0 { $0.kick = when } else if h.kind == 1 { $0.snare = when } else { $0.hat = when } }
+            // Lights: the keyboard on the kick, Caps Lock on the snare and the hi-hats (not the ones the voice mutes).
+            if h.kind == 0 { lightCue(.beat(h.acc)) } else if h.kind == 1 || !rapIsTalking(at: t) { lightCue(.tick) }
             next += 1
         }
         ringing.removeAll { t - $0.t > 0.2 }
         let i16 = Int(t / s16)
+        // The screen: a flicker out of the dark on each bar's first beat, dark again by the next beat.
+        if i16 / 16 != litBar { litBar = i16 / 16; lightCue(.screen(.flicker(peak: 0.45, seconds: 4 * s16))) }
         live { $0.step = i16 % 16; $0.bar = i16 / 16 }
         if !rapping, t >= rapStart {
             rapping = true
@@ -709,14 +1071,19 @@ func touchToPlay() {
     live { $0.touchSeen = true; $0.touchEnds = endAt }
     let scale = ["G5", "A5", "B5", "C6", "E6", "F6", "G6", "A6", "B6", "C7"].map(hz)
     var current = scale[4]
-    var lastDown = false, downAt = 0.0
+    var lastDown = false, downAt = 0.0, lastIdx = -1
     while now() < endAt && !interrupted() {
         let c = contact
         live { $0.touchDown = c.down; if c.down { $0.touchX = Double(c.x); $0.touchY = Double(c.y) } }
         guard c.down else { lastDown = false; usleep(3000); continue }
+        let idx = min(scale.count - 1, max(0, Int((Double(c.x) * Double(scale.count)).rounded(.down))))
+        // Lights: a new note (the finger comes down, or slides onto another) pulses the keyboard; Caps Lock stays on
+        // while the finger holds it.
+        if !lastDown || idx != lastIdx { lightCue(.note(seconds: 0.08, strength: min(1, 0.5 + Double(c.size)))) }
+        else { lightCue(.held(seconds: 0.08)) }
+        lastIdx = idx
         if !lastDown { downAt = now() }
         lastDown = true
-        let idx = min(scale.count - 1, max(0, Int((Double(c.x) * Double(scale.count)).rounded(.down))))
         let target = scale[idx]
         current *= pow(target / current, 0.3)
         let age = now() - downAt
@@ -743,10 +1110,12 @@ func sparkle() {
     for n in ["A5", "C6", "E6", "A6", "C7"] where !stopRequested {
         let f = hz(n)
         let seg = (0.07 * f).rounded() / f
+        lightCue(.note(seconds: seg, strength: 0.9))
         play([(f, 1)], ms: seg * 1000, level: 0.9)
         let end = mach_absolute_time() + UInt64(seg * ticksPerSecond)
         waitUntil(end)
     }
+    lightCue(.note(seconds: 0.45, strength: 1))
     let start = mach_absolute_time()
     var t = 0.0
     while t < 0.6 && !stopRequested {
@@ -1469,6 +1838,7 @@ func show(visuals: Bool) {
         if speakersMuted() == true { live { $0.muted = true }; pause(1.2) }
         skipRequested = false
     }
+    startLights()    // only with --lights
 
     // 2. It wakes up: a heartbeat, no words yet.
     if !stopRequested && !jumpToCredits { enter(.heart, 2, "WAKING UP"); pause(0.3); heartbeat() }
@@ -1488,7 +1858,11 @@ func show(visuals: Bool) {
     // 8. Touch to play.
     if !stopRequested && !jumpToCredits { enter(.touch, 8, "TOUCH TO PLAY"); say("touch the trackpad: slide for pitch (12 s)"); touchToPlay() }
     // 9. Say anything (only with the screen: it needs typing).
-    if !stopRequested && !jumpToCredits && visuals { enter(.say, 9, "SAY ANYTHING"); sayAnything() }
+    if !stopRequested && !jumpToCredits && visuals {
+        enter(.say, 9, "SAY ANYTHING")
+        lightCue(.screen(.rest))    // the screen comes back up: you need to see what you type
+        sayAnything()
+    }
     // 10. Outro.
     if !stopRequested {
         jumpToCredits = false
@@ -1497,6 +1871,7 @@ func show(visuals: Bool) {
         talk(voices[byeLine] ?? render(byeLine), text: byeLine)
         live { $0.scene = .outro }
         sparkle()
+        stopLights()    // the screen eases back to its own brightness, and every light goes back as it was
         if visuals {
             keyPressed = false
             live { $0.waitingForKey = true }
@@ -1507,6 +1882,7 @@ func show(visuals: Bool) {
     }
 
     let s = snapshot()
+    stopLights()
     if visuals { stopRenderer(); restoreTerminal() }
     signOff(seconds: Int(now() - s.started), actuations: s.actuations)
 }
@@ -1553,6 +1929,7 @@ if flag("--help") || flag("-h") {
       --dark                            white on black instead of black on white
       --plain                           no visuals
       --external                        play through an external Magic Trackpad
+      --lights                          the keyboard backlight, the Caps Lock light and the screen play along
 
     Mute your Mac: it still talks. Put it on a table, and keep your hands off the trackpad until it asks.
     a90.com · x.com/codycollier
@@ -1568,17 +1945,52 @@ applyTheme(light: !flag("--dark"))
 let plain = flag("--plain")
 let wantsSweep = flag("--sweep")
 preferExternal = flag("--external")
+let wantsLights = flag("--lights")
 if let unknown = args.first(where: { $0.hasPrefix("-") }) { usageError("\"\(unknown)\" isn't an option.") }
 
 signal(SIGINT) { _ in requestEnd() }
 signal(SIGTERM) { _ in stopRequested = true }
 atexit { restoreTerminal() }
+if wantsLights {
+    // The lights are borrowed, so every way out puts them back. The terminal window closing ends it like Ctrl-C
+    // twice; atexit runs the restore (last in, first out: before the terminal's). A crash skips atexit, and the
+    // screen may be dark just then: put the lights back on the way down, then crash as before.
+    signal(SIGHUP) { _ in stopRequested = true }
+    atexit { stopLights() }
+    for sig in [SIGTRAP, SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGFPE] {
+        signal(sig) { sig in
+            if lightsRunning {
+                lightsRunning = false
+                backlight?.restore(); capsLight?.restore(); screenLight?.restore()
+            }
+            signal(sig, SIG_DFL); raise(sig)
+        }
+    }
+}
 
 motor = openMotor()
 motorPointer = Unmanaged.passUnretained(motor! as AnyObject).toOpaque()
 
+// The lights are extra: whichever can't be reached, it says so and plays without it.
+if wantsLights {
+    func note(_ s: String) { FileHandle.standardError.write(("  nospeaker: " + s + "\n").data(using: .utf8)!) }
+    backlight = KeyboardBacklight()
+    if backlight == nil { note("no keyboard backlight it can control here, so it plays without it.") }
+    capsLight = CapsLight()
+    if capsLight == nil {
+        note("couldn't set the Caps Lock light, so it plays without it. If macOS is refusing it, add the app you ran")
+        note("this from (Terminal, iTerm…) in System Settings > Privacy & Security > Input Monitoring, then reopen it.")
+    }
+    // The screen only in the show: on its own, a line or the sweep is over before the screen could set a scene.
+    if !wantsSweep && args.isEmpty {
+        screenLight = ScreenLight()
+        if screenLight == nil { note("can't set the screen's brightness here, so the screen stays as it is.") }
+    }
+}
+
 if wantsSweep || !args.isEmpty {
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
+    startLights()    // only with --lights
     if wantsSweep { print("sweeping 100 Hz → 4 kHz…"); sweep(seconds: 5) }
     if !args.isEmpty {
         let text = args.joined(separator: " ")
@@ -1586,6 +1998,7 @@ if wantsSweep || !args.isEmpty {
         print("trackpad: “\(text)”")
         talk(frames, text: text)
     }
+    stopLights()
 } else {
     let interactive = isatty(STDOUT_FILENO) == 1 && isatty(STDIN_FILENO) == 1
     // Too small a window: say so, and start by itself as soon as it's big enough.
