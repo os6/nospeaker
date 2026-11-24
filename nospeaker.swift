@@ -7,7 +7,8 @@
 //   nospeaker                      the show: about a minute and a half, in the terminal
 //   nospeaker "any words"          say something
 //   nospeaker --sweep              a rising tone from 100 Hz to 4 kHz
-//   options                        --voice <name> (any voice from `say -v '?'`), --dark, --plain, --external
+//   options                        --voice <name> (any voice from `say -v '?'`), --dark, --plain, --external,
+//                                  --volume <0 to 100>
 //
 // How it talks: macOS's own voice (`say`) speaks the line into memory. Every 10 ms, linear prediction finds
 // the voice's two strongest resonances (formants), its loudness and its pitch. The motor plays those two
@@ -105,6 +106,9 @@ var motorBuiltIn = false
 var deviceList: CFArray?
 /// --external: play through an external Magic Trackpad instead of the built-in trackpad.
 var preferExternal = false
+/// --volume: how hard the motor is driven, as a share of its normal maximum (1, the default). It only turns
+/// the motor down, never past that maximum.
+var masterVolume: Float = 1
 
 /// The Mac's model identifier, like "MacBookPro18,3" or "Mac14,3".
 func macModel() -> String {
@@ -176,8 +180,8 @@ func openMotor() -> CFTypeRef {
 var motor: CFTypeRef?
 var motorPointer: UnsafeMutableRawPointer?
 
-/// Plays tones (Hz, relative strength) together for `ms` at overall `level` (0…1). Strengths are scaled to
-/// add up to 1: past that is louder, but the driver starts stalling on long runs.
+/// Plays tones (Hz, relative strength) together for `ms` at overall `level` (0…1), turned down by --volume.
+/// Strengths are scaled to add up to 1: past that is louder, but the driver starts stalling on long runs.
 func play(_ tones: [(hz: Double, amp: Double)], ms: Double, level: Float) {
     guard let motorPointer, !tones.isEmpty else { return }
     let sum = max(tones.reduce(0) { $0 + $1.amp }, 0.0001)
@@ -186,7 +190,7 @@ func play(_ tones: [(hz: Double, amp: Double)], ms: Double, level: Float) {
         "Tones": tones.map { ["Type": "Sine", "Amplitude": $0.amp / sum, "DurationMS": ms, "DelayMS": 0.0, "FrequencykHz": $0.hz / 1000] },
     ]
     guard let act = actuationCreate!(shape as CFDictionary, 0) else { return }
-    _ = actuationPlay!(act, motorPointer, 0, min(1, max(0, level)), 0)
+    _ = actuationPlay!(act, motorPointer, 0, min(1, max(0, level)) * masterVolume, 0)
     Unmanaged<AnyObject>.fromOpaque(act).release()
     let first = tones[0].hz
     live {
@@ -1553,6 +1557,7 @@ if flag("--help") || flag("-h") {
       --dark                            white on black instead of black on white
       --plain                           no visuals
       --external                        play through an external Magic Trackpad
+      --volume 50                       turn it down: 0 to 100, where 100 (full) is the default
 
     Mute your Mac: it still talks. Put it on a table, and keep your hands off the trackpad until it asks.
     a90.com · x.com/codycollier
@@ -1568,6 +1573,12 @@ applyTheme(light: !flag("--dark"))
 let plain = flag("--plain")
 let wantsSweep = flag("--sweep")
 preferExternal = flag("--external")
+if let v = option("--volume", example: "50") {
+    guard let n = Float(v), n >= 0, n <= 100 else {
+        usageError("--volume needs a number from 0 to 100, like: --volume 50\nIt only turns the motor down: 100, the default, is already its normal maximum.")
+    }
+    masterVolume = n / 100
+}
 if let unknown = args.first(where: { $0.hasPrefix("-") }) { usageError("\"\(unknown)\" isn't an option.") }
 
 signal(SIGINT) { _ in requestEnd() }
