@@ -7,6 +7,7 @@
 //   nospeaker                      the show: about a minute and a half, in the terminal
 //   nospeaker "any words"          say something
 //   nospeaker --sweep              a rising tone from 100 Hz to 4 kHz
+//   nospeaker --rickroll           never gonna give you up
 //   options                        --voice <name> (any voice from `say -v '?'`), --dark, --plain, --external
 //
 // How it talks: macOS's own voice (`say`) speaks the line into memory. Every 10 ms, linear prediction finds
@@ -502,9 +503,134 @@ func caption(_ text: String, seconds: Double) { live { $0.caption = text; $0.cap
 // MARK: - Notes
 
 func hz(_ note: String) -> Double {
-    let names: [String: Int] = ["C": -9, "C#": -8, "D": -7, "D#": -6, "E": -5, "F": -4, "F#": -3, "G": -2, "G#": -1, "A": 0, "A#": 1, "B": 2]
+    let names: [String: Int] = ["C": -9, "C#": -8, "Db": -8, "D": -7, "D#": -6, "Eb": -6, "E": -5, "F": -4, "F#": -3, "Gb": -3,
+                                "G": -2, "G#": -1, "Ab": -1, "A": 0, "A#": 1, "Bb": 1, "B": 2]
     guard let octave = Int(String(note.last!)), let semi = names[String(note.dropLast())] else { return 440 }
     return 440 * pow(2, Double(semi + (octave - 4) * 12) / 12)
+}
+
+// MARK: - Never gonna give you up
+
+/// The chorus of "Never Gonna Give You Up", twice, instrumental: the melody an octave up (in the motor's
+/// cleanest range, around 1 kHz), eighth-note bass under it, kick on 1 and 3, snare on 2 and 4.
+///
+/// Each actuation lasts a whole number of melody periods, picked so it also ends close to a whole number of
+/// bass periods. Both sines then restart near phase zero, so neither one buzzes at the actuation rate.
+func rickroll(visual: Bool) {
+    let bpm = 113.0, beat = 60 / bpm
+    let pickup: [(String, Double)] = ["Ab5", "Bb5", "Db6", "Bb5"].map { ($0, 0.25) }
+    let give = pickup + [("F6", 0.75), ("F6", 0.75), ("Eb6", 1.5)]
+    let down = pickup + [("Eb6", 0.75), ("Eb6", 0.75), ("Db6", 0.75), ("C6", 0.25), ("Bb5", 0.5)]
+    let around = pickup + [("Db6", 0.75), ("Eb6", 0.75), ("C6", 0.75), ("Bb5", 0.25), ("Ab5", 1), ("-", 0.5),
+                           ("Ab5", 0.5), ("Eb6", 1), ("Db6", 1.5)]
+    let bye = pickup + [("Ab6", 0.75), ("C6", 0.75), ("Db6", 0.75), ("C6", 0.25), ("Bb5", 0.5)]
+    let chorus = give + down + around + give + bye + around            // 32 beats, starting on a pickup
+    let song = chorus + chorus + [("-", 1), ("Ab5", 4)]
+
+    struct Note { let start: Double; let length: Double; let name: String; let hz: Double? }
+    var notes: [Note] = []
+    var at = 0.0
+    for (name, beats) in song {
+        notes.append(Note(start: at, length: beats, name: name, hz: name == "-" ? nil : hz(name)))
+        at += beats
+    }
+    let totalBeats = at
+    // Bass: two chords a bar, from the downbeat after the pickup. The last bar holds the tonic and fades.
+    let progression = [["Db3", "Eb3"], ["C3", "F3"], ["Db3", "Eb3"], ["Ab3", "Ab3"]].map { $0.map(hz) }
+    let lastBar = Int((totalBeats - 1) / 4) - 2
+
+    let start = mach_absolute_time()
+    var t = 0.0, index = 0
+    var lastLine = ""
+    while t < totalBeats * beat && !interrupted() {
+        let b = t / beat
+        while index + 1 < notes.count, notes[index + 1].start <= b + 1e-9 { index += 1 }
+        let note = notes[index]
+        var tones: [(hz: Double, amp: Double)] = []
+
+        // Melody: a short scoop from the previous note, vibrato on the long ones, a small gap before the next.
+        let age = (b - note.start) * beat
+        let sounding = note.length * beat - (index == notes.count - 1 ? 0 : 0.03)
+        var melodyHz: Double?
+        if let target = note.hz, age < sounding {
+            var f = target
+            if index > 0, let from = notes[index - 1].hz, age < 0.03 { f = from * pow(target / from, age / 0.03) }
+            if note.length >= 0.75 && age > 0.15 { f *= pow(2, min(1, (age - 0.15) / 0.2) * 0.2 * sin(2 * .pi * 5.5 * age) / 12) }
+            var level = age < 0.01 ? 0.5 + 0.5 * age / 0.01 : 1.0
+            if index == notes.count - 1 { level *= max(0, 1 - age / sounding) }
+            tones.append((f, 0.7 * level))
+            melodyHz = f
+        }
+
+        // Bass and drums run from the first downbeat.
+        var bassHz: Double?
+        var transient = false
+        if b >= 1 {
+            let inSong = b - 1
+            let bar = Int(inSong / 4), pos = inSong.truncatingRemainder(dividingBy: 4)
+            if bar <= lastBar + 1 {
+                let final = bar > lastBar
+                let root = final ? hz("Ab3") : progression[bar % 4][pos < 2 ? 0 : 1]
+                let eighth = pos.truncatingRemainder(dividingBy: 0.5) * beat
+                let env = final ? max(0, 1 - pos / 4) * (0.4 + 0.6 * exp(-pos * beat * 2))
+                                : (eighth < 0.008 ? eighth / 0.008 : 1) * (0.3 + 0.7 * exp(-eighth * 9))
+                tones.append((root, 0.45 * env))
+                tones.append((root * 2, 0.25 * env))
+                bassHz = root
+                let hit = pos.truncatingRemainder(dividingBy: 1) * beat
+                let onKick = Int(pos) % 2 == 0, onSnare = !final && Int(pos) % 2 == 1
+                if onKick && hit < 0.12 && (!final || pos < 1) {
+                    tones.append((150 + 850 * exp(-hit / 0.018), 1.1 * exp(-hit / 0.045)))
+                    transient = hit < 0.08
+                } else if onSnare && hit < 0.12 {
+                    let e = 0.6 * exp(-hit / 0.04)
+                    tones.append((Double.random(in: 1300...3800), e * 0.55))
+                    tones.append((Double.random(in: 1300...3800), e * 0.45))
+                    transient = hit < 0.08
+                }
+            }
+        }
+
+        // How long this actuation lasts.
+        var step: Double
+        if transient {
+            step = 0.004
+        } else if let m = melodyHz {
+            step = max(1, (0.025 * m).rounded()) / m
+            if let bass = bassHz {
+                var bestErr = 1.0
+                for n in Int((0.012 * m).rounded(.up))...Int(0.04 * m) {
+                    let d = Double(n) / m, p = d * bass
+                    let err = abs(p - p.rounded())
+                    if err < bestErr { bestErr = err; step = d }
+                }
+            }
+        } else if let bass = bassHz {
+            step = max(1, (0.02 * bass).rounded()) / bass
+        } else {
+            step = 0.005
+        }
+        // Never run past the next sixteenth, where a note, bass note or drum may start.
+        let next = ((b * 4 + 1e-6).rounded(.down) + 1) / 4 * beat - t
+        if next > 0.003 && next < step { step = next }
+
+        tones.sort { $0.amp > $1.amp }
+        let use = Array(tones.prefix(6))
+        let total = use.reduce(0) { $0 + $1.amp }
+        if total > 0.01 { play(use, ms: step * 1000, level: Float(min(1, total))) }
+
+        let line = note.hz == nil ? "" : String(format: "%-4@ %5.0f Hz", note.name as NSString, note.hz!)
+        if line != lastLine {
+            lastLine = line
+            let bar = min(Int(b / totalBeats * 40), 40)
+            let progress = String(repeating: "=", count: bar) + String(repeating: " ", count: 40 - bar)
+            if visual { print("\r  ♪ [\(progress)]  \(line.padding(toLength: 13, withPad: " ", startingAt: 0))", terminator: "") }
+            fflush(stdout)
+        }
+        t += step
+        waitUntil(start + UInt64(t * ticksPerSecond))
+    }
+    if visual { print("") }
 }
 
 // MARK: - The show's parts (sound)
@@ -1549,6 +1675,7 @@ if flag("--help") || flag("-h") {
       nospeaker                         the show (space skips a part, q goes to the end)
       nospeaker "any words"             just say something
       nospeaker --sweep                 a rising tone, 100 Hz to 4 kHz
+      nospeaker --rickroll              you know the rules
       --voice Daniel                    any voice from `say -v '?'`
       --dark                            white on black instead of black on white
       --plain                           no visuals
@@ -1567,6 +1694,7 @@ if let v = voiceName, !voiceExists(v) {
 applyTheme(light: !flag("--dark"))
 let plain = flag("--plain")
 let wantsSweep = flag("--sweep")
+let wantsRickroll = flag("--rickroll")
 preferExternal = flag("--external")
 if let unknown = args.first(where: { $0.hasPrefix("-") }) { usageError("\"\(unknown)\" isn't an option.") }
 
@@ -1577,7 +1705,11 @@ atexit { restoreTerminal() }
 motor = openMotor()
 motorPointer = Unmanaged.passUnretained(motor! as AnyObject).toOpaque()
 
-if wantsSweep || !args.isEmpty {
+if wantsRickroll {
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
+    print("\n  never gonna give you up · 113 bpm · no speakers used  (ctrl-c to stop)\n")
+    rickroll(visual: isatty(STDOUT_FILENO) == 1)
+} else if wantsSweep || !args.isEmpty {
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
     if wantsSweep { print("sweeping 100 Hz → 4 kHz…"); sweep(seconds: 5) }
     if !args.isEmpty {
