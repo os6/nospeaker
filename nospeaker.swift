@@ -133,7 +133,7 @@ func noTrackpad(_ found: Bool) -> Never {
     fail(message)
 }
 
-func openMotor() -> CFTypeRef {
+func openMotor(preferExternal: Bool = false) -> CFTypeRef {
     guard let createList, let getID, let actuatorCreate, let actuatorOpen, actuationCreate != nil, actuationPlay != nil else {
         fail("This version of macOS doesn't have the trackpad functions this needs. It was made for macOS 12 to 27.")
     }
@@ -147,7 +147,8 @@ func openMotor() -> CFTypeRef {
         if getID(dev, &id) == 0 { ids.append((id, isBuiltIn?(dev) ?? false)) }
     }
     deviceCount = ids.count
-    for d in ids.sorted(by: { $0.builtIn && !$1.builtIn }) {
+    let order = ids.sorted { preferExternal ? (!$0.builtIn && $1.builtIn) : ($0.builtIn && !$1.builtIn) }
+    for d in order {
         if let ref = actuatorCreate(d.id)?.takeRetainedValue(), actuatorOpen(ref) == 0 {
             motorDeviceID = d.id
             motorBuiltIn = d.builtIn
@@ -1536,6 +1537,7 @@ if flag("--help") || flag("-h") {
       --voice Daniel                    any voice from `say -v '?'`
       --dark                            white on black instead of black on white
       --plain                           no visuals
+      --external                        play on a Magic Trackpad, not the built-in one
 
     Mute your Mac: it still talks. Put it on a table, and keep your hands off the trackpad until it asks.
     a90.com · x.com/codycollier
@@ -1549,6 +1551,7 @@ if let v = voiceName, !voiceExists(v) {
 }
 applyTheme(light: !flag("--dark"))
 let plain = flag("--plain")
+let preferExternal = flag("--external")
 let wantsSweep = flag("--sweep")
 if let unknown = args.first(where: { $0.hasPrefix("-") }) { usageError("\"\(unknown)\" isn't an option.") }
 
@@ -1556,7 +1559,7 @@ signal(SIGINT) { _ in requestEnd() }
 signal(SIGTERM) { _ in stopRequested = true }
 atexit { restoreTerminal() }
 
-motor = openMotor()
+motor = openMotor(preferExternal: preferExternal)
 motorPointer = Unmanaged.passUnretained(motor! as AnyObject).toOpaque()
 
 if wantsSweep || !args.isEmpty {
