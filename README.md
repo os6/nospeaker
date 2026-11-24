@@ -67,6 +67,7 @@ cd nospeaker
 
 --dark                               white on black
 --plain                              no visuals, plain text
+--external                           play on a Magic Trackpad, not the built-in one
 ```
 
 ## 04 / needs
