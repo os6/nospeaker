@@ -9,6 +9,7 @@
 //   nospeaker --sweep              a rising tone from 100 Hz to 4 kHz
 //   options                        --voice <name> (any voice from `say -v '?'`), --dark, --plain, --external,
 //                                  --lights (the keyboard backlight, Caps Lock light and screen play along)
+//   nospeaker --music song.mid     play your own MIDI file (--parts 3,4, --only 6-31.5, --no-drums)
 //
 // How it talks: macOS's own voice (`say`) speaks the line into memory. Every 10 ms, linear prediction finds
 // the voice's two strongest resonances (formants), its loudness and its pitch. The motor plays those two
@@ -1157,6 +1158,276 @@ func sayAnything() {
     live { $0.inputActive = false }
 }
 
+// MARK: - Music from a MIDI file (--music)
+
+/// A note of the music: when (seconds), what (Hz), which MIDI channel (from 0; 9 is the drums), how loud (0…1).
+struct ScoreNote { var start: Double; var end: Double; var hz: Double; var ch: Int; var gain: Double }
+/// A drum hit. kind: 0 bass drum or tom, 1 snare or clap, 2 cymbal or hi-hat.
+struct ScoreHit { var t: Double; var kind: Int }
+/// A beat (a quarter note, from the file's tempo), and whether it starts a bar.
+typealias Beat = (t: Double, downbeat: Bool)
+struct Score { var notes: [ScoreNote]; var hits: [ScoreHit]; var beats: [Beat]; var end: Double; var title: String }
+/// What plays, from 0 to `length` seconds.
+typealias Piece = (notes: [ScoreNote], hits: [ScoreHit], beats: [Beat], length: Double)
+/// --parts 3,4: the channels the motor plays, numbered from 1 as music apps show them (10 is the drums). nil: all.
+var musicParts: Set<Int>?
+/// --no-drums turns this off.
+var scoreDrums = true
+
+/// Reads a standard MIDI file (format 0 or 1) into notes and drum hits, through its tempo changes. Each note's
+/// loudness is its velocity, squared (closer to how loud it sounds). Channel 10 is drums: kicks and toms, snares
+/// and claps, cymbals and hi-hats become the three kinds of hit; other drums are left out. Nothing is stored in
+/// this program: the music comes from your file.
+func loadMIDI(_ path: String) -> Score {
+    guard let d = FileManager.default.contents(atPath: (path as NSString).expandingTildeInPath) else {
+        fail("There's no file at \(path).", headline: "nospeaker can't open that music.", code: 66)
+    }
+    let b = [UInt8](d)
+    func bad() -> Never { fail("\(path) looks like a MIDI file but couldn't be read.", headline: "nospeaker can't play that music.", code: 65) }
+    guard b.starts(with: Array("MThd".utf8)) else { fail("\(path) isn't a MIDI file (.mid).", headline: "nospeaker can't play that music.", code: 65) }
+    func u16(_ o: Int) -> Int { o + 2 <= b.count ? Int(b[o]) << 8 | Int(b[o + 1]) : 0 }
+    func u32(_ o: Int) -> Int { o + 4 <= b.count ? u16(o) << 16 | u16(o + 2) : 0 }
+    let tracks = u16(10), division = u16(12)
+    guard division & 0x8000 == 0, division > 0 else {
+        fail("This MIDI file counts time in SMPTE frames, which this doesn't read.", headline: "nospeaker can't play that music.", code: 65)
+    }
+    struct Ev { var tick: Int; var order: Int; var status: UInt8; var a: UInt8; var b: UInt8 }
+    var events: [Ev] = [], tempos: [(tick: Int, usPerBeat: Double)] = [], title = ""
+    var pos = 14 + max(0, u32(4) - 6)
+    for _ in 0..<tracks {
+        guard pos + 8 <= b.count, b[pos..<(pos + 4)].elementsEqual("MTrk".utf8) else { break }
+        let end = min(b.count, pos + 8 + u32(pos + 4))
+        var p = pos + 8, tick = 0, running: UInt8 = 0
+        func vlq() -> Int { var v = 0; while p < end { let c = b[p]; p += 1; v = v << 7 | Int(c & 0x7F); if c < 0x80 { break } }; return v }
+        while p < end {
+            tick += vlq()
+            guard p < end else { break }
+            let c = b[p]
+            if c == 0xFF {    // a meta event: the tempo and the title are the ones used
+                guard p + 1 < end else { bad() }
+                let type = b[p + 1]; p += 2
+                let len = vlq()
+                guard p + len <= end else { bad() }
+                if type == 0x51, len == 3 { tempos.append((tick, Double(Int(b[p]) << 16 | Int(b[p + 1]) << 8 | Int(b[p + 2])))) }
+                if type == 0x03, title.isEmpty { title = String(decoding: b[p..<(p + len)], as: UTF8.self) }
+                p += len
+            } else if c == 0xF0 || c == 0xF7 {    // system exclusive: skipped
+                p += 1
+                let len = vlq()    // first: vlq() moves p, so p += vlq() would rest on evaluation order
+                p += len
+            } else {
+                if c & 0x80 != 0 { running = c; p += 1 }
+                guard running != 0 else { bad() }
+                let kind = running & 0xF0, two = kind != 0xC0 && kind != 0xD0
+                guard p + (two ? 1 : 0) < end else { break }
+                events.append(Ev(tick: tick, order: events.count, status: running, a: b[p], b: two ? b[p + 1] : 0))
+                p += two ? 2 : 1
+            }
+        }
+        pos = end
+    }
+    // Ticks → seconds through the tempo map (120 beats a minute until the first tempo change).
+    tempos.sort { $0.tick < $1.tick }
+    if tempos.first?.tick != 0 { tempos.insert((0, 500_000), at: 0) }
+    var marks: [(tick: Int, sec: Double, usPerBeat: Double)] = []
+    for t in tempos {
+        let sec = marks.last.map { $0.sec + Double(t.tick - $0.tick) * $0.usPerBeat / 1e6 / Double(division) } ?? 0
+        marks.append((t.tick, sec, t.usPerBeat))
+    }
+    func seconds(_ tick: Int) -> Double {
+        let m = marks.last { $0.tick <= tick } ?? marks[0]
+        return m.sec + Double(tick - m.tick) * m.usPerBeat / 1e6 / Double(division)
+    }
+    events.sort { ($0.tick, $0.order) < ($1.tick, $1.order) }
+    var open: [Int: [(start: Double, vel: UInt8)]] = [:]
+    var notes: [ScoreNote] = [], hits: [ScoreHit] = [], last = 0.0
+    for e in events {
+        let ch = Int(e.status & 0x0F), kind = e.status & 0xF0, t = seconds(e.tick)
+        last = max(last, t)
+        if kind == 0x90 && e.b > 0 {
+            if ch == 9 {
+                switch e.a {
+                case 35, 36, 41, 43, 45, 47, 48, 50: hits.append(ScoreHit(t: t, kind: 0))
+                case 37, 38, 39, 40: hits.append(ScoreHit(t: t, kind: 1))
+                case 42, 44, 46, 49, 51, 52, 53, 55, 57, 59: hits.append(ScoreHit(t: t, kind: 2))
+                default: break
+                }
+            } else {
+                open[ch << 8 | Int(e.a), default: []].append((t, e.b))
+            }
+        } else if kind == 0x80 || kind == 0x90, ch != 9, var q = open[ch << 8 | Int(e.a)], !q.isEmpty {
+            let n = q.removeFirst()
+            open[ch << 8 | Int(e.a)] = q
+            let v = Double(n.vel) / 127
+            notes.append(ScoreNote(start: n.start, end: max(t, n.start + 0.01), hz: 440 * pow(2, (Double(e.a) - 69) / 12), ch: ch, gain: v * v))
+        }
+    }
+    notes.sort { ($0.start, $0.ch) < ($1.start, $1.ch) }
+    // The beats: every quarter note by the tempo map, a bar every four (the usual 4/4).
+    var beats: [Beat] = []
+    var beat = 0
+    while seconds(beat * division) <= last {
+        beats.append((seconds(beat * division), beat % 4 == 0))
+        beat += 1
+    }
+    // The title goes to the terminal: no control characters from the file.
+    title = String(String.UnicodeScalarView(title.unicodeScalars.filter { $0.value >= 32 && $0.value != 127 }))
+    return Score(notes: notes, hits: hits, beats: beats, end: last, title: title)
+}
+
+/// Just one stretch of the file, from `a` to `b` seconds in its own time, with the notes already sounding at `a`.
+func excerpt(_ s: Score, from a: Double, to b: Double) -> Piece {
+    let notes = s.notes.filter { $0.start < b && $0.end > a + 0.001 }.map { n -> ScoreNote in
+        var m = n; m.start = max(0, n.start - a); m.end = min(n.end, b) - a; return m
+    }
+    let hits = s.hits.filter { $0.t >= a - 0.001 && $0.t < b }.map { ScoreHit(t: $0.t - a, kind: $0.kind) }
+    let beats = s.beats.filter { $0.t >= a - 0.001 && $0.t < b }.map { (t: $0.t - a, downbeat: $0.downbeat) }
+    return (notes, hits, beats, b - a)
+}
+
+/// Plays a piece: the channels chosen with --parts (the drums when 10 is among them, or with no --parts), unless
+/// --no-drums. It starts 50 ms from now, on the mach clock, so anything else can start on the same moment.
+func perform(_ piece: Piece, fadeOut: Double = 0) {
+    let start = mach_absolute_time() + UInt64(0.05 * ticksPerSecond)
+    let notes = musicParts.map { p in piece.notes.filter { p.contains($0.ch + 1) } } ?? piece.notes
+    let hits = scoreDrums && (musicParts?.contains(10) ?? true) ? piece.hits : []
+    playScore(notes, hits: hits, beats: piece.beats, length: piece.length, fadeOut: fadeOut, at: start)
+}
+
+/// Plays a score on the motor, mixed like the beat in the show. The lowest channel is the bass, played the way the
+/// beat plays its bass (every actuation restarts on the bass note's period, with two of its harmonics where the
+/// motor is loud). The lead is the highest of the channels that play enough to carry a tune; the rest are quieter
+/// harmony. While the lead rests, the loudest other voice takes its place, so a part without the tune isn't left
+/// quiet. Each channel moves by whole octaves to 560 Hz or above, where the motor is loud and clean (chosen from
+/// the notes as written), and its volume is measured against its own loudest note (a MIDI mix assumes a speaker;
+/// on the motor, quiet means lost). `fadeOut`: seconds at the end over which it fades, so a stretch cut
+/// mid-phrase doesn't just stop. With --lights: the keyboard on the beats, Caps Lock on the tune's notes, and the
+/// screen full for the first bar's first beat, then dark with a faint flicker on each bar.
+func playScore(_ notes: [ScoreNote], hits: [ScoreHit], beats: [Beat], length: Double, fadeOut: Double = 0, at start: UInt64) {
+    var byCh: [Int: [Double]] = [:], loudest: [Int: Double] = [:]
+    for n in notes { byCh[n.ch, default: []].append(n.hz); loudest[n.ch] = max(loudest[n.ch] ?? 0, n.gain) }
+    func median(_ v: [Double]) -> Double { v.sorted()[v.count / 2] }
+    // The bass first (the lowest channel, if it's low and not alone), then the lead: of the rest that play enough
+    // to carry a tune, the highest (a busy accompaniment, like an arpeggio, has more notes than the tune itself).
+    let lowest = byCh.min { median($0.value) < median($1.value) }
+    let bassCh = byCh.count > 1 ? lowest.flatMap { median($0.value) < 200 ? $0.key : nil } : nil
+    let noteCount = byCh.values.reduce(0) { $0 + $1.count }
+    let tunes = byCh.filter { $0.key != bassCh && $0.value.count >= max(6, noteCount / 20) }
+    let lead = (tunes.isEmpty ? byCh.filter { $0.key != bassCh } : tunes).max { median($0.value) < median($1.value) }?.key ?? 0
+    var shift: [Int: Double] = [:]
+    for (ch, v) in byCh where ch != bassCh {
+        var s = 1.0
+        while median(v) * s < 560 { s *= 2 }
+        shift[ch] = s
+    }
+    var next = 0, nextHit = 0, nextBeat = 0, active: [ScoreNote] = [], ringing: [ScoreHit] = []
+    var t = 0.0, screenSet = false
+    waitUntil(start)
+    while t < length && !interrupted() {
+        let first = next
+        while next < notes.count, notes[next].start <= t + 0.0005 { active.append(notes[next]); next += 1 }
+        // A note of the tune lights Caps Lock: the lead's, or while the lead rests, the loudest other new note.
+        let leadSounds = active.contains { $0.ch == lead && $0.end > t }
+        if let n = notes[first..<next].filter({ $0.ch == lead || ($0.ch != bassCh && !leadSounds) }).max(by: { $0.gain < $1.gain }) {
+            lightCue(.note(seconds: n.end - n.start, strength: 0.5 + 0.5 * n.gain / max(loudest[n.ch] ?? 1, 1e-6)))
+        }
+        while nextHit < hits.count, hits[nextHit].t <= t + 0.0005 { ringing.append(hits[nextHit]); nextHit += 1 }
+        while nextBeat < beats.count, beats[nextBeat].t <= t + 0.0005 {
+            let b = beats[nextBeat], beat = nextBeat + 1 < beats.count ? beats[nextBeat + 1].t - b.t : 0.5
+            lightCue(.beat(b.downbeat ? 1 : 0.6))
+            if b.downbeat { lightCue(.screen(screenSet ? .flicker(peak: 0.45, seconds: beat) : .full(seconds: beat))); screenSet = true }
+            nextBeat += 1
+        }
+        active.removeAll { $0.end <= t }
+        ringing.removeAll { t - $0.t > 0.2 }
+        var tones: [(hz: Double, amp: Double)] = []
+        var leadHz: Double?
+        var bassHz: Double?
+        // Who leads right now: the lead channel if it plays, else the loudest other voice that isn't the bass.
+        let leadPlaying = active.contains { $0.ch == lead }
+        let voice = leadPlaying ? lead : active.filter { $0.ch != bassCh }.max {
+            $0.gain / (loudest[$0.ch] ?? 1) < $1.gain / (loudest[$1.ch] ?? 1)
+        }?.ch
+        let tuneHz = active.last { $0.ch == voice }.map { $0.hz * (shift[$0.ch] ?? 1) }
+        // A tune note where the glass is weak plays alone, since the motor shares its strength among all its tones
+        // and there the note needs all of it. Measured with the Mac's mic: below ~1050 Hz a note's octave above is
+        // about as loud as the note, and between C#7 and D7 (2150–2290 Hz) the glass rings by itself at ~2320 Hz.
+        let solo = tuneHz.map { $0 < 1050 || (2150...2290).contains($0) } ?? false
+        for n in active {
+            let age = t - n.start
+            let env = (age < 0.008 ? age / 0.008 : 1) * (0.55 + 0.45 * exp(-age / 0.12))
+            let gain = n.gain / max(loudest[n.ch] ?? n.gain, 1e-6)
+            if n.ch == bassCh {
+                bassHz = n.hz
+                for (target, w) in [(880.0, 0.6), (1320.0, 0.4)] {
+                    tones.append((max(1, (target / n.hz).rounded()) * n.hz, 0.45 * env * w * gain))
+                }
+            } else {
+                let f = n.hz * (shift[n.ch] ?? 1)
+                let main = n.ch == voice
+                if main { leadHz = f }
+                // A low note's octave above is as loud as the note itself (the motor's own second harmonic), so the
+                // ear still hears the note, unless the accompaniment plays that octave too; then the octave wins by
+                // 10 dB and the tune seems to jump up. So no accompaniment an octave above the tune.
+                if !main, let lead = tuneHz, solo || abs(1200 * log2(f / (2 * lead))) < 30 { continue }
+                tones.append((f, (main ? 1.0 : 0.3) * env * gain))
+                // Where the glass rings by itself, a quiet octave below holds the note's pitch for the ear.
+                if main, (2150...2290).contains(f) { tones.append((f / 2, 0.45 * env * gain)) }
+            }
+        }
+        // Drums stay light and short, ticks above the tune: the motor shares one strength among all its tones, so a
+        // loud, low drum pushes the tune down on every hit.
+        for h in ringing {
+            let age = t - h.t
+            switch h.kind {
+            case 0 where age < 0.06:    // bass drum or tom: a short, high pitch dive
+                tones.append((420 + 680 * exp(-age / 0.012), 0.3 * exp(-age / 0.025)))
+            case 1 where age < 0.09:    // snare: a short burst of high tones
+                let e = 0.35 * exp(-age / 0.03)
+                tones.append((Double.random(in: 1800...3800), e * 0.55))
+                tones.append((Double.random(in: 1800...3800), e * 0.45))
+            case 2 where age < 0.08:    // cymbal or hi-hat
+                tones.append((3951, 0.25 * exp(-age / 0.03)))
+            default: break
+            }
+        }
+        tones.sort { $0.amp > $1.amp }
+        let use = Array(tones.prefix(6))
+        // One actuation. Every actuation starts all its tones again from zero, so its length decides which tones
+        // come out whole: a period of the bass while it plays (that restart is what makes the bass heard); else a
+        // whole number of the lead's cycles, so the tune never breaks off mid-wave (cut at every accompaniment note
+        // instead, the tune lost its pitch). Of the lengths that do that (20–60 ms, or up to the next note), the one
+        // where the other tones also come out nearest whole cycles, and near 45 ms: each restart puts faint side
+        // tones 1/length away from the note, and the glass can lift one of them over the note; longer, they sit
+        // closer and the pitch holds. (The driver also cuts a single actuation off after about 0.3 s.)
+        let upcoming = [next < notes.count ? notes[next].start : nil, nextHit < hits.count ? hits[nextHit].t : nil]
+            .compactMap { $0 }.map { $0 - t }.filter { $0 > 0 }.min()
+        var step = 0.005
+        if let bass = bassHz {
+            step = 1 / bass
+            if let dt = upcoming, dt > 0.0035, dt < step { step = dt }
+        } else if let f = leadHz ?? use.first?.hz {
+            var kMin = max(1, Int((0.02 * f).rounded(.up))), kMax = max(kMin, Int(0.06 * f))
+            if let dt = upcoming, dt < Double(kMax) / f { kMax = max(1, Int(dt * f)); kMin = min(kMin, kMax) }
+            func cost(_ k: Int) -> Double {
+                let len = Double(k) / f
+                var c = 0.0
+                for tone in use where abs(tone.hz - f) > 0.5 {
+                    let cycles = tone.hz * len
+                    c += tone.amp * abs(cycles - cycles.rounded())
+                }
+                return c + 0.002 * abs(len - 0.045) / 0.045    // all else equal, about 45 ms
+            }
+            step = Double((kMin...kMax).min { cost($0) < cost($1) } ?? kMin) / f
+        }
+        let total = use.reduce(0) { $0 + $1.amp }
+        let fade = fadeOut > 0 ? min(1, max(0, (length - t) / fadeOut)) : 1
+        if total > 0.01 && fade > 0.01 { play(use, ms: step * 1000, level: Float(min(1, total) * fade)) }
+        t += step
+        waitUntil(start + UInt64(t * ticksPerSecond))
+    }
+}
+
 // MARK: - Terminal
 
 var savedTermios = termios()
@@ -1930,6 +2201,10 @@ if flag("--help") || flag("-h") {
       --plain                           no visuals
       --external                        play through an external Magic Trackpad
       --lights                          the keyboard backlight, the Caps Lock light and the screen play along
+      --music song.mid                  play your own MIDI file
+        --parts 3,4                       only these channels (it lists the file's channels when it starts)
+        --only 6-31.5                     only this stretch, in seconds
+        --no-drums                        without the drums
 
     Mute your Mac: it still talks. Put it on a table, and keep your hands off the trackpad until it asks.
     a90.com · x.com/codycollier
@@ -1946,7 +2221,36 @@ let plain = flag("--plain")
 let wantsSweep = flag("--sweep")
 preferExternal = flag("--external")
 let wantsLights = flag("--lights")
+/// --music song.mid: your own MIDI file, played on the trackpad.
+let musicPath = option("--music", example: "song.mid")
+musicParts = option("--parts", example: "3,4").map { s in
+    let p = s.split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+    guard !p.isEmpty, p.allSatisfy({ (1...16).contains($0) }) else { usageError("--parts takes channel numbers 1 to 16, like: --parts 3,4") }
+    return Set(p)
+}
+/// --only 6-31.5: just this stretch of the music, in seconds.
+let musicOnly: (Double, Double)? = option("--only", example: "6-31.5").map { s in
+    let p = s.split(separator: "-").compactMap { Double($0) }
+    guard p.count == 2, p[1] > p[0] else { usageError("--only takes two times in seconds, like: --only 6-31.5") }
+    return (p[0], p[1])
+}
+scoreDrums = !flag("--no-drums")
 if let unknown = args.first(where: { $0.hasPrefix("-") }) { usageError("\"\(unknown)\" isn't an option.") }
+if musicPath == nil && (musicParts != nil || musicOnly != nil || !scoreDrums) { usageError("--parts, --only and --no-drums go with --music.") }
+if musicPath != nil && (wantsSweep || !args.isEmpty) { usageError("--music plays on its own, without words or --sweep.") }
+// The music is read before the motor opens, so a file it can't play stops here.
+let music = musicPath.map { path -> (name: String, piece: Piece) in
+    let score = loadMIDI(path)
+    let channels = Set(score.notes.map { $0.ch + 1 }).union(score.hits.isEmpty ? [] : [10]).sorted()
+    func list(_ c: [Int]) -> String { c.map(String.init).joined(separator: ", ") }
+    guard !channels.isEmpty else { fail("\(path) has no notes.", headline: "nospeaker can't play that music.", code: 65) }
+    let playing = musicParts.map { p in channels.filter(p.contains) } ?? channels
+    if playing.isEmpty { usageError("--parts: this file plays on channels \(list(channels)).") }
+    var name = (score.title.isEmpty ? (path as NSString).lastPathComponent : score.title) + ": channels \(list(playing))"
+    if playing != channels { name += " (the file has \(list(channels)))" }
+    guard let only = musicOnly else { return (name + String(format: ", %.1f s", score.end), (score.notes, score.hits, score.beats, score.end)) }
+    return (name + String(format: ", %.1f–%.1f s", only.0, only.1), excerpt(score, from: only.0, to: only.1))
+}
 
 signal(SIGINT) { _ in requestEnd() }
 signal(SIGTERM) { _ in stopRequested = true }
@@ -1988,7 +2292,13 @@ if wantsLights {
     }
 }
 
-if wantsSweep || !args.isEmpty {
+if let music {
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
+    print("playing \(music.name)")
+    startLights()    // only with --lights
+    perform(music.piece, fadeOut: musicOnly == nil ? 0 : 0.6)    // a stretch cut mid-phrase fades out
+    stopLights()
+} else if wantsSweep || !args.isEmpty {
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
     startLights()    // only with --lights
     if wantsSweep { print("sweeping 100 Hz → 4 kHz…"); sweep(seconds: 5) }

@@ -69,7 +69,15 @@ cd nospeaker
 --plain                              no visuals, plain text
 --external                           play through an external Magic Trackpad
 --lights                             the keyboard backlight, Caps Lock light and screen play along
+
+./nospeaker --music song.mid         play your own MIDI file
+--parts 3,4                          only these channels (it lists the file's channels when it starts)
+--only 6-31.5                        only this stretch, in seconds
+--no-drums                           without the drums
 ```
+
+The motor can't play a whole band at once, so music sounds best with one or two parts: the tune and maybe its
+echo or chords. Start with the whole file, then pick the channels that carry the tune with `--parts`.
 
 With `--lights` the screen goes dark after the opening and only flickers slowly, about once a bar, so the
 keyboard is the thing to watch. Everything goes back as it was at the end, after Ctrl-C too. The Caps Lock light
