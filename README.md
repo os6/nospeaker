@@ -127,6 +127,18 @@ across: every semitone, in Hz · up: loudness, +16 to +34 dB
 It's loud from about 100 Hz to 4 kHz, with a few dead spots where the glass resonates. Its loudest, cleanest
 notes are around 1 kHz, which covers the most important part of a voice.
 
+**Your trackpad's range.** Every trackpad's glass rings in its own way. To measure yours, with
+its own microphone:
+
+```sh
+swiftc -O tools/glassmap.swift -o tools/glassmap
+tools/glassmap
+```
+
+It plays every semitone in under a minute, then marks the neighbouring notes your motor plays at one pitch, and
+any dead spots. On an M1 Pro the top octave turned out to have only 7 playable notes:
+[tools/README.md](tools/README.md) has what we found, and how to share your own run.
+
 **The voice.** macOS's own voice speaks the line into memory. Every 10 ms, linear prediction finds the voice's
 two strongest resonances (formants), its loudness and its pitch. The motor plays those two resonances as tones,
 restarted on every beat of the pitch, so they buzz like a voice instead of whistling. Hiss sounds (s, f, t)

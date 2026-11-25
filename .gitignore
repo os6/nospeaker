@@ -2,3 +2,5 @@ build/
 nospeaker
 .DS_Store
 dist/
+tools/glassmap
+/glassmap-*.json
