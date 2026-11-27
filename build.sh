@@ -53,6 +53,11 @@ codesign -s - -f build/nospeaker 2>/dev/null
 mv -f build/nospeaker nospeaker     # a rename, so a copy that's already running isn't disturbed
 echo "built ./nospeaker ($(lipo -archs nospeaker)). Run it with: ./nospeaker"
 
+# Build GUI app bundle
+if [ -f "./build-app.sh" ]; then
+    ./build-app.sh
+fi
+
 [ "$mode" = "release" ] || exit 0
 
 # Release: Developer ID signature (with the hardened runtime Apple requires), then notarization.
