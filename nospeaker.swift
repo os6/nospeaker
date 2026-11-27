@@ -456,10 +456,10 @@ func findExecutable(_ name: String) -> String? {
 
 func renderYouTube(_ urlString: String) -> (frames: [AudioFrame], title: String) {
     guard let ytdlpPath = findExecutable("yt-dlp") else {
-        fail("yt-dlp isn't installed. Install it to fetch YouTube audio:\n\n  brew install yt-dlp ffmpeg", headline: "nospeaker needs yt-dlp for -yt.")
+        fail("yt-dlp isn't installed. Install it to fetch YouTube audio:\n\n  brew install yt-dlp ffmpeg", headline: "nospeaker needs yt-dlp for --yt.")
     }
     guard let ffmpegPath = findExecutable("ffmpeg") else {
-        fail("ffmpeg isn't installed. Install it to convert YouTube audio:\n\n  brew install ffmpeg", headline: "nospeaker needs ffmpeg for -yt.")
+        fail("ffmpeg isn't installed. Install it to convert YouTube audio:\n\n  brew install ffmpeg", headline: "nospeaker needs ffmpeg for --yt.")
     }
 
     let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("nospeaker-yt-\(getpid())")
@@ -1697,7 +1697,7 @@ if flag("--help") || flag("-h") {
 
       nospeaker                         the show (space skips a part, q goes to the end)
       nospeaker "any words"             just say something
-      nospeaker -yt <url>               fetch and play audio from a YouTube video
+      nospeaker --yt <url>              fetch and play audio from a YouTube video
       nospeaker --sweep                 a rising tone, 100 Hz to 4 kHz
       --voice Daniel                    any voice from `say -v '?'`
       --dark                            white on black instead of black on white
@@ -1714,8 +1714,8 @@ voiceName = option("--voice", example: "Daniel")
 if let v = voiceName, !voiceExists(v) {
     fail("There's no voice called \"\(v)\" on this Mac.\nList the voices you have with: say -v '?'", headline: "nospeaker can't use that voice.", code: 64)
 }
-let ytURL = option("-yt", example: "https://www.youtube.com/watch?v=shB_JE2rX0Y")
-    ?? option("--yt", example: "https://www.youtube.com/watch?v=shB_JE2rX0Y")
+let ytURL = option("--yt", example: "https://www.youtube.com/watch?v=shB_JE2rX0Y")
+    ?? option("-yt", example: "https://www.youtube.com/watch?v=shB_JE2rX0Y")
 applyTheme(light: !flag("--dark"))
 let plain = flag("--plain")
 let wantsSweep = flag("--sweep")
