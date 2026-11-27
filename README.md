@@ -32,7 +32,23 @@ One command. About a minute and a half. No speakers used.
 
 ## 02 / run it
 
-`[ one line ]`
+`[ GUI App (Recommended) ]`
+
+A native macOS application with full visual controls, live spectrogram/formants, real-time trackpad theremin visualizer, soundboard, and voice picker:
+
+```sh
+./launch-gui.sh
+# or: open NoSpeaker.app
+# or: ./nospeaker --gui
+```
+
+You can also install both the app and CLI with one command:
+
+```sh
+./install.sh
+```
+
+`[ one line CLI ]`
 
 ```sh
 curl -fsSL a90.com/nospeaker | sh
@@ -61,6 +77,7 @@ cd nospeaker
 ## 03 / play with it
 
 ```text
+./nospeaker --gui                    open the native macOS GUI app
 ./nospeaker "hello there"            say anything
 ./nospeaker --voice Daniel "hello"   in another macOS voice
 ./nospeaker --sweep                  a rising tone, 100 Hz to 4 kHz
@@ -69,6 +86,14 @@ cd nospeaker
 --plain                              no visuals, plain text
 --external                           play through an external Magic Trackpad
 ```
+
+### GUI Features
+
+- 🎭 **The Show**: Full 10-part theatrical show with stage navigation, captions, and real-time audio analysis.
+- 🗣️ **Say Anything**: Type any text, pick any installed macOS voice (Daniel, Samantha, Karen, etc.), and hear it whispered through the trackpad.
+- 👆 **Touch Instrument (Theremin)**: Interactive real-time instrument with live touch indicator showing finger position (X = pitch, Y = vibrato, pressure = loudness).
+- 🎛️ **Lab & Soundboard**: Interactive piano keyboard (C5 to C7), sound presets (Heartbeat, The Hook, Beat & Rap, Sparkle, Thump), frequency sweep, and tone generator.
+- ⚙️ **Hardware & Setup**: Force Touch detection status, Magic Trackpad preference toggle, speaker mute checker, and 1-click CLI installer.
 
 ## 04 / needs
 

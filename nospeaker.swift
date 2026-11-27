@@ -1541,12 +1541,28 @@ func option(_ flag: String, example: String) -> String? {
 }
 func flag(_ f: String) -> Bool { if let i = args.firstIndex(of: f) { args.remove(at: i); return true }; return false }
 
+if flag("--gui") {
+    let scriptDir = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().path
+    let candidates = [
+        "\(scriptDir)/NoSpeaker.app",
+        "/Applications/NoSpeaker.app",
+        "\(NSHomeDirectory())/Applications/NoSpeaker.app"
+    ]
+    let targetApp = candidates.first { FileManager.default.fileExists(atPath: $0) } ?? "\(scriptDir)/NoSpeaker.app"
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+    p.arguments = [targetApp]
+    try? p.run()
+    exit(0)
+}
+
 if flag("--help") || flag("-h") {
     print("""
     NO SPEAKER · a90.com presents
     Your MacBook's trackpad has no speaker. This makes it talk anyway, through its haptic motor.
 
       nospeaker                         the show (space skips a part, q goes to the end)
+      nospeaker --gui                   launch the native macOS GUI app
       nospeaker "any words"             just say something
       nospeaker --sweep                 a rising tone, 100 Hz to 4 kHz
       --voice Daniel                    any voice from `say -v '?'`

@@ -1,4 +1,5 @@
 build/
 nospeaker
+NoSpeaker.app/
 .DS_Store
 dist/
