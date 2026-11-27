@@ -17,6 +17,7 @@
 // Private API: MultitouchSupport is undocumented and may change with any macOS update. The motor is never
 // driven past its normal maximum.
 
+import Accelerate
 import AVFoundation
 import CoreAudio
 import Darwin
@@ -312,6 +313,13 @@ func voiceExists(_ name: String) -> Bool {
     }
 }
 
+func loadWAVSamples(at url: URL) -> [Float]? {
+    guard let file = try? AVAudioFile(forReading: url),
+          let buf = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)),
+          (try? file.read(into: buf)) != nil, let ch = buf.floatChannelData?[0] else { return nil }
+    return Array(UnsafeBufferPointer(start: ch, count: Int(buf.frameLength)))
+}
+
 func render(_ text: String) -> [Frame] {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("nospeaker-\(getpid()).wav")
     defer { try? FileManager.default.removeItem(at: url) }
@@ -320,18 +328,181 @@ func render(_ text: String) -> [Frame] {
     p.arguments = ["-o", url.path, "--file-format=WAVE", "--data-format=LEF32@16000"] + (voiceName.map { ["-v", $0] } ?? []) + [text]
     do { try p.run() } catch { fail("It couldn't run macOS's voice (/usr/bin/say), which it needs to talk.") }
     p.waitUntilExit()
-    guard p.terminationStatus == 0, let file = try? AVAudioFile(forReading: url),
-          let buf = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)),
-          (try? file.read(into: buf)) != nil, let ch = buf.floatChannelData?[0] else {
+    guard p.terminationStatus == 0, let samples = loadWAVSamples(at: url) else {
         if let voiceName {
             fail("There's no voice called \"\(voiceName)\" on this Mac.\nList the voices you have with: say -v '?'", headline: "nospeaker can't use that voice.")
         }
         fail("macOS's voice (say) couldn't speak that line.", headline: "nospeaker couldn't prepare its voice.")
     }
-    var f = analyse(Array(UnsafeBufferPointer(start: ch, count: Int(buf.frameLength))))
+    var f = analyse(samples)
     while let first = f.first, first.level == 0 { f.removeFirst() }
     while let last = f.last, last.level == 0 { f.removeLast() }
     return f
+}
+
+struct AudioFrame {
+    var tones: [(hz: Double, amp: Double)] = []
+    var level: Float = 0
+}
+let audioHop = 0.020
+
+func analyseAudio(_ x: [Float]) -> [AudioFrame] {
+    let n = 1024, half = n / 2, hopN = Int(audioHop * sampleRate)
+    guard x.count >= n, let fft = vDSP_create_fftsetup(vDSP_Length(10), FFTRadix(kFFTRadix2)) else { return [] }
+    defer { vDSP_destroy_fftsetup(fft) }
+
+    var window = [Float](repeating: 0, count: n)
+    vDSP_hann_window(&window, vDSP_Length(n), Int32(vDSP_HANN_NORM))
+
+    let minBin = max(2, Int((170.0 * Double(n) / sampleRate).rounded()))
+    let maxBin = min(half - 2, Int((3200.0 * Double(n) / sampleRate).rounded()))
+    let binWeight: [Double] = (0..<half).map { k in
+        let hz = Double(k) * sampleRate / Double(n)
+        let lo = min(1.0, max(0.25, (hz - 120.0) / 350.0))
+        let hi = hz <= 2200 ? 1.0 : max(0.25, 1.0 - (hz - 2200.0) / 1400.0)
+        return lo * hi
+    }
+
+    var windowed = [Float](repeating: 0, count: n)
+    var real = [Float](repeating: 0, count: half)
+    var imag = [Float](repeating: 0, count: half)
+    var mags = [Float](repeating: 0, count: half)
+
+    var frames: [AudioFrame] = []
+    var rmsList: [Double] = []
+    var i = 0
+    while i + n <= x.count {
+        x.withUnsafeBufferPointer { buf in
+            vDSP_vmul(buf.baseAddress! + i, 1, window, 1, &windowed, 1, vDSP_Length(n))
+        }
+        var rmsSq: Float = 0
+        vDSP_measqv(&windowed, 1, &rmsSq, vDSP_Length(n))
+        rmsList.append(sqrt(Double(rmsSq)))
+
+        real.withUnsafeMutableBufferPointer { rBuf in
+            imag.withUnsafeMutableBufferPointer { iBuf in
+                var split = DSPSplitComplex(realp: rBuf.baseAddress!, imagp: iBuf.baseAddress!)
+                windowed.withUnsafeBytes { raw in
+                    let pairs = raw.bindMemory(to: DSPComplex.self)
+                    vDSP_ctoz(pairs.baseAddress!, 2, &split, 1, vDSP_Length(half))
+                }
+                vDSP_fft_zrip(fft, &split, 1, vDSP_Length(10), FFTDirection(FFT_FORWARD))
+                vDSP_zvabs(&split, 1, &mags, 1, vDSP_Length(half))
+            }
+        }
+
+        var cands: [(hz: Double, score: Double, amp: Double)] = []
+        for k in minBin...maxBin {
+            let m = Double(mags[k]), mL = Double(mags[k - 1]), mR = Double(mags[k + 1])
+            guard m > mL && m >= mR && m > 0 else { continue }
+            let denom = mL - 2 * m + mR
+            let delta = abs(denom) > 1e-9 ? max(-0.5, min(0.5, 0.5 * (mL - mR) / denom)) : 0
+            let hz = (Double(k) + delta) * sampleRate / Double(n)
+            cands.append((hz, m * binWeight[k], m))
+        }
+        cands.sort { $0.score > $1.score }
+
+        var picked: [(hz: Double, amp: Double)] = []
+        let topScore = cands.first?.score ?? 1
+        for c in cands {
+            if c.score < topScore * 0.22 { break }
+            if picked.allSatisfy({ abs($0.hz - c.hz) >= 75 }) {
+                picked.append((c.hz, c.amp))
+                if picked.count == 3 { break }
+            }
+        }
+        frames.append(AudioFrame(tones: picked, level: 0))
+        i += hopN
+    }
+
+    let peak = rmsList.max() ?? 1
+    for k in frames.indices {
+        let rel = rmsList[k] / max(peak, 1e-9)
+        frames[k].level = rel < 0.025 ? 0 : Float(min(1, pow(rel, 0.45)))
+    }
+    while let first = frames.first, first.level == 0 { frames.removeFirst() }
+    while let last = frames.last, last.level == 0 { frames.removeLast() }
+    return frames
+}
+
+func playAudio(_ frames: [AudioFrame], title: String) {
+    guard !frames.isEmpty else { return }
+    let total = Double(frames.count) * audioHop
+    caption(title, seconds: total)
+    let start = mach_absolute_time()
+    var t = 0.0
+    while t < total && !interrupted() {
+        let f = frames[min(frames.count - 1, Int(t / audioHop))]
+        var step = 0.010
+        if f.level > 0, let primary = f.tones.first {
+            step = max(0.014, min(0.028, max(1, (audioHop * primary.hz).rounded()) / primary.hz))
+            play(f.tones, ms: step * 1000, level: f.level)
+            live { $0.f0 = primary.hz; $0.f1 = primary.hz; $0.f2 = f.tones.count > 1 ? f.tones[1].hz : 0 }
+        }
+        t += step
+        waitUntil(start + UInt64(t * ticksPerSecond))
+    }
+    live { $0.f0 = 0; $0.f1 = 0; $0.f2 = 0 }
+}
+
+func findExecutable(_ name: String) -> String? {
+    let pathDirs = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
+    for dir in pathDirs + ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] where !dir.isEmpty {
+        let candidate = (dir as NSString).appendingPathComponent(name)
+        if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
+    }
+    return nil
+}
+
+func renderYouTube(_ urlString: String) -> (frames: [AudioFrame], title: String) {
+    guard let ytdlpPath = findExecutable("yt-dlp") else {
+        fail("yt-dlp isn't installed. Install it to fetch YouTube audio:\n\n  brew install yt-dlp ffmpeg", headline: "nospeaker needs yt-dlp for -yt.")
+    }
+    guard let ffmpegPath = findExecutable("ffmpeg") else {
+        fail("ffmpeg isn't installed. Install it to convert YouTube audio:\n\n  brew install ffmpeg", headline: "nospeaker needs ffmpeg for -yt.")
+    }
+
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("nospeaker-yt-\(getpid())")
+    try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+    let outTemplate = tmpDir.appendingPathComponent("audio.%(ext)s").path
+    let wavURL = tmpDir.appendingPathComponent("audio.wav")
+
+    let p = Process(), outPipe = Pipe(), errPipe = Pipe()
+    p.executableURL = URL(fileURLWithPath: ytdlpPath)
+    p.arguments = [
+        "--no-playlist", "--no-warnings", "--quiet", "--no-progress",
+        "--print", "title", "--no-simulate",
+        "-x", "--audio-format", "wav",
+        "--ffmpeg-location", (ffmpegPath as NSString).deletingLastPathComponent,
+        "--postprocessor-args", "ffmpeg:-ar 16000 -ac 1 -c:a pcm_f32le",
+        "-o", outTemplate, urlString
+    ]
+    p.standardOutput = outPipe
+    p.standardError = errPipe
+
+    do { try p.run() } catch { fail("It couldn't run yt-dlp at \(ytdlpPath).", headline: "nospeaker couldn't fetch YouTube audio.") }
+
+    var errData = Data()
+    let group = DispatchGroup()
+    group.enter()
+    DispatchQueue.global().async { errData = errPipe.fileHandleForReading.readDataToEndOfFile(); group.leave() }
+    let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
+    group.wait()
+    p.waitUntilExit()
+
+    if interrupted() { exit(0) }
+    guard p.terminationStatus == 0, let samples = loadWAVSamples(at: wavURL) else {
+        let errText = String(data: errData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let detail = errText.isEmpty ? "yt-dlp exited with status \(p.terminationStatus)." : errText
+        fail(detail, headline: "nospeaker couldn't fetch that YouTube video.")
+    }
+    let frames = analyseAudio(samples)
+    let title = String(data: outData, encoding: .utf8)?
+        .split(separator: "\n").first.map(String.init)?
+        .trimmingCharacters(in: .whitespacesAndNewlines) ?? urlString
+    return (frames, title.isEmpty ? urlString : title)
 }
 
 func lpc(_ x: [Double], order p: Int) -> ([Double], Double) {
@@ -1438,36 +1609,14 @@ func show(visuals: Bool) {
     if visuals { takeTerminal(); startKeys(); startRenderer() }
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
 
-    // 1. Intro: what's about to happen, while the voice is prepared (a real loading bar).
-    enter(.intro, 1, "LOADING")
-    say("a90.com presents NO SPEAKER. Your trackpad doesn't have one. In a moment it's going to talk.")
-    let introStart = now()
     let rapLine = "No speaker. No wires. Just a motor and a beat."
     let turnLine = "Your turn. Be gentle."
     let byeLine = "Okay. Back to clicking."
     let greeting = greetingLine()
     let phrases = [greeting, rapLine, turnLine, byeLine]
-    let steps = 2 + phrases.count
-    func progress(_ done: Int, _ label: String) {
-        live { $0.stepDone = done; $0.stepTotal = steps }
-    }
-    progress(0, "opening MultitouchSupport.framework")
-    pause(0.6)
-    progress(1, "connecting to the trackpad")
-    pause(0.5)
     var voices: [String: [Frame]] = [:]
-    for (i, line) in phrases.enumerated() where !stopRequested {
-        progress(2 + i, "preparing the voice \(i + 1)/\(phrases.count)")
+    for line in phrases where !stopRequested {
         voices[line] = render(line)
-    }
-    progress(steps, "ready")
-    pause(max(0.6, 4.0 - (now() - introStart)))
-    // The proof is the point: hold here until the speakers are muted (space starts anyway; 15 s at most).
-    if visuals {
-        let holdUntil = now() + 15
-        while speakersMuted() == false && !interrupted() && now() < holdUntil { usleep(100_000) }
-        if speakersMuted() == true { live { $0.muted = true }; pause(1.2) }
-        skipRequested = false
     }
 
     // 2. It wakes up: a heartbeat, no words yet.
@@ -1548,6 +1697,7 @@ if flag("--help") || flag("-h") {
 
       nospeaker                         the show (space skips a part, q goes to the end)
       nospeaker "any words"             just say something
+      nospeaker -yt <url>               fetch and play audio from a YouTube video
       nospeaker --sweep                 a rising tone, 100 Hz to 4 kHz
       --voice Daniel                    any voice from `say -v '?'`
       --dark                            white on black instead of black on white
@@ -1564,6 +1714,8 @@ voiceName = option("--voice", example: "Daniel")
 if let v = voiceName, !voiceExists(v) {
     fail("There's no voice called \"\(v)\" on this Mac.\nList the voices you have with: say -v '?'", headline: "nospeaker can't use that voice.", code: 64)
 }
+let ytURL = option("-yt", example: "https://www.youtube.com/watch?v=shB_JE2rX0Y")
+    ?? option("--yt", example: "https://www.youtube.com/watch?v=shB_JE2rX0Y")
 applyTheme(light: !flag("--dark"))
 let plain = flag("--plain")
 let wantsSweep = flag("--sweep")
@@ -1577,9 +1729,15 @@ atexit { restoreTerminal() }
 motor = openMotor()
 motorPointer = Unmanaged.passUnretained(motor! as AnyObject).toOpaque()
 
-if wantsSweep || !args.isEmpty {
+if wantsSweep || ytURL != nil || !args.isEmpty {
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
     if wantsSweep { print("sweeping 100 Hz → 4 kHz…"); sweep(seconds: 5) }
+    if let ytURL {
+        print("fetching audio…")
+        let (frames, title) = renderYouTube(ytURL)
+        print("trackpad: “\(title)”")
+        playAudio(frames, title: title)
+    }
     if !args.isEmpty {
         let text = args.joined(separator: " ")
         let frames = render(text)
