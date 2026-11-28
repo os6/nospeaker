@@ -296,11 +296,31 @@ let hop = 0.010
 let sampleRate = 16000.0
 var voiceName: String?
 
+/// The account that ran `sudo nospeaker`, if that's how it was started. macOS's voices belong to that account:
+/// `say` run as root can't find them and writes silence, without an error.
+let sudoUser: (name: String, uid: uid_t, gid: gid_t)? = {
+    let env = ProcessInfo.processInfo.environment
+    guard getuid() == 0, let name = env["SUDO_USER"], name != "root",
+          let uid = env["SUDO_UID"].flatMap({ uid_t($0) }), let gid = env["SUDO_GID"].flatMap({ gid_t($0) }) else { return nil }
+    return (name, uid, gid)
+}()
+
+/// `say` with these arguments, run as the account that ran sudo when there is one.
+func sayProcess(_ arguments: [String]) -> Process {
+    let p = Process()
+    if let sudoUser {
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+        p.arguments = ["-n", "-u", sudoUser.name, "/usr/bin/say"] + arguments
+    } else {
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+        p.arguments = arguments
+    }
+    return p
+}
+
 /// True if `say` has a voice by this name. (`say` quietly falls back to the default voice for unknown names.)
 func voiceExists(_ name: String) -> Bool {
-    let p = Process(), pipe = Pipe()
-    p.executableURL = URL(fileURLWithPath: "/usr/bin/say")
-    p.arguments = ["-v", "?"]
+    let p = sayProcess(["-v", "?"]), pipe = Pipe()
     p.standardOutput = pipe
     guard (try? p.run()) != nil else { return true }   // can't check: let `say` decide
     let list = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
@@ -312,12 +332,18 @@ func voiceExists(_ name: String) -> Bool {
     }
 }
 
-func render(_ text: String) -> [Frame] {
-    let url = FileManager.default.temporaryDirectory.appendingPathComponent("nospeaker-\(getpid()).wav")
+/// The line in macOS's voice, as frames. `mustSpeak`: silence means the voice is broken (the show's own lines
+/// and the command line), so stop and say so instead of playing nothing.
+func render(_ text: String, mustSpeak: Bool = false) -> [Frame] {
+    var url = FileManager.default.temporaryDirectory.appendingPathComponent("nospeaker-\(getpid()).wav")
+    if let sudoUser {
+        // Under sudo, `say` runs as that account, so it writes to a file that account owns.
+        url = URL(fileURLWithPath: "/tmp/nospeaker-\(getpid()).wav")
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        chown(url.path, sudoUser.uid, sudoUser.gid)
+    }
     defer { try? FileManager.default.removeItem(at: url) }
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/usr/bin/say")
-    p.arguments = ["-o", url.path, "--file-format=WAVE", "--data-format=LEF32@16000"] + (voiceName.map { ["-v", $0] } ?? []) + [text]
+    let p = sayProcess(["-o", url.path, "--file-format=WAVE", "--data-format=LEF32@16000"] + (voiceName.map { ["-v", $0] } ?? []) + [text])
     do { try p.run() } catch { fail("It couldn't run macOS's voice (/usr/bin/say), which it needs to talk.") }
     p.waitUntilExit()
     guard p.terminationStatus == 0, let file = try? AVAudioFile(forReading: url),
@@ -331,6 +357,12 @@ func render(_ text: String) -> [Frame] {
     var f = analyse(Array(UnsafeBufferPointer(start: ch, count: Int(buf.frameLength))))
     while let first = f.first, first.level == 0 { f.removeFirst() }
     while let last = f.last, last.level == 0 { f.removeLast() }
+    if f.isEmpty && mustSpeak {
+        fail(getuid() == 0
+             ? "macOS's voice (say) came back silent. It was run as root, which doesn't have your voices.\nRun it without sudo: it doesn't need it."
+             : "macOS's voice (say) came back silent.\nCheck that it speaks with: say \"hello there\"",
+             headline: "nospeaker couldn't prepare its voice.")
+    }
     return f
 }
 
@@ -437,9 +469,11 @@ func analyse(_ x: [Float]) -> [Frame] {
         prev = f
         i += hopN
     }
-    let peak = rmsList.max() ?? 1
+    // Levels are relative to the loudest frame, so near-silence (say writes about -64 dB of it when it has no
+    // voice to speak with) would otherwise be scaled up into a full line. Below -60 dB, nothing is said.
+    let peak = rmsList.max() ?? 0
     for k in frames.indices {
-        let rel = rmsList[k] / max(peak, 1e-9)
+        let rel = peak < 0.001 ? 0 : rmsList[k] / peak
         frames[k].level = rel < 0.02 ? 0 : Float(min(1, pow(rel, 0.45)))
         if frames[k].level == 0 { frames[k].voiced = false }
     }
@@ -1458,7 +1492,7 @@ func show(visuals: Bool) {
     var voices: [String: [Frame]] = [:]
     for (i, line) in phrases.enumerated() where !stopRequested {
         progress(2 + i, "preparing the voice \(i + 1)/\(phrases.count)")
-        voices[line] = render(line)
+        voices[line] = render(line, mustSpeak: true)
     }
     progress(steps, "ready")
     pause(max(0.6, 4.0 - (now() - introStart)))
@@ -1582,7 +1616,7 @@ if wantsSweep || !args.isEmpty {
     if wantsSweep { print("sweeping 100 Hz → 4 kHz…"); sweep(seconds: 5) }
     if !args.isEmpty {
         let text = args.joined(separator: " ")
-        let frames = render(text)
+        let frames = render(text, mustSpeak: true)
         print("trackpad: “\(text)”")
         talk(frames, text: text)
     }
